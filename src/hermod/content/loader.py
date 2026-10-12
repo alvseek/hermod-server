@@ -253,6 +253,16 @@ class ContentLoader:
             return core
         return self._inlined(composed)[0]
 
+    def components_used(self, name: str) -> list[str]:
+        """The components inlined into this procedure's served form, in order.
+
+        Exposed for the fidelity check: the overlay's compiler reports the same list, and this is
+        the one half of composition that is carried here rather than imported, so it is the half
+        that needs comparing.
+        """
+        _text, used = self._inlined(self._procedure_path(name).read_text(encoding="utf-8"))
+        return list(used)
+
     def unresolved_ops(self, name: str) -> list[str]:
         """Ops the composed prompt references that its backend section does not define.
 

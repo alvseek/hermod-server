@@ -1,0 +1,3 @@
+[submodule "agent-memory-project"]
+	path = agent-memory-project
+	url = ../agent-memory-project

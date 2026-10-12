@@ -43,6 +43,30 @@ _ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 # The server's only say over the overlay's content.
 EXCLUDED_PROCEDURES = frozenset({"push-all", "pull-all"})
 
+# Served procedure -> its single optional argument, as ``(name, description)``.
+#
+# Authored rather than derived: the ``## Arguments`` sections are prose bullets in varying
+# shapes — one is a bare ``[domain]`` line, another a ``$ARGUMENTS`` token followed by mode
+# bullets, another two positional tokens, and one has no argument at all — so parsing them would
+# be a heuristic over data that is not deterministic. Every declared argument is **optional**,
+# because each procedure has an ask-if-missing branch, so the slot saves a round trip and makes
+# nothing stricter.
+PROMPT_ARGUMENTS: dict[str, tuple[str, str]] = {
+    "awaken-coder": ("domain", "the agent domain to awaken; asks if omitted"),
+    "load-project-context": ("keyword", "match context files by keyword; lists all if omitted"),
+    "map-orientation": (
+        "mode",
+        "`create` for a first-time full scan, or `--session-touched <paths>` to refresh named "
+        "entries; loads the map if omitted",
+    ),
+    "project-wrap-up": (
+        "mode",
+        "`all` or `agent` push mode, plus `fresh` to re-evaluate the whole session",
+    ),
+    "push-project": ("mode", "`all` or `agent`, optionally followed by a commit message"),
+    "update-project-context": ("context", "the project context to capture; asks if omitted"),
+}
+
 # `§ op` — the abstract op reference, and its definition in a backend section. Both patterns
 # mirror the overlay compiler's, because they are the *reporting* half of the seam: the seam
 # module extracts and substitutes sections, and says nothing about which ops a body asked for.
@@ -208,6 +232,14 @@ class ContentLoader:
         """
         lead = _lead_sentence(self._procedure_path(name).read_text(encoding="utf-8"))
         return lead or f"Procedure '{name}'."
+
+    def argument_prompt(self, name: str) -> tuple[str, str] | None:
+        """This procedure's single optional argument as ``(name, description)``.
+
+        ``None`` when it takes none. Every declared argument is optional: each procedure asks for
+        what it needs when invoked without one, so the slot only ever saves a round trip.
+        """
+        return PROMPT_ARGUMENTS.get(name)
 
     def get_prompt(self, name: str, arguments: str | None = None) -> str:
         """Return the composed procedure, with ``arguments`` filled in when one is given.

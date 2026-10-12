@@ -1,5 +1,7 @@
-"""Serving the overlay's procedures: the composition pipeline."""
+"""Serving the overlay's procedures and templates."""
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from hermod.content.loader import ContentLoader, ContentSource
+
+__all__ = ["ContentLoader", "ContentSource"]

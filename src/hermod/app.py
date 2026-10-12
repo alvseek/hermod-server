@@ -35,6 +35,8 @@ from hermod.api_mcp.server import build_mcp
 from hermod.business_services.context_service import ContextService
 from hermod.configuration.config import Config, load_config
 from hermod.content.loader import ContentLoader, ContentSource
+from hermod.data_repositories.postgres_project_repository import PostgresProjectRepository
+from hermod.data_repositories.project_repository import ProjectRepository
 from hermod.data_repositories.sqlite_project_repository import SqliteProjectRepository
 
 #: Where the MCP face is mounted, and therefore the address a client connects to.
@@ -247,11 +249,45 @@ def build_auth(config: Config) -> AuthProvider | None:
     )
 
 
+class StoreBackendError(RuntimeError):
+    """Raised when the configured store backend is unknown or incomplete."""
+
+
+def _validate_backend(config: Config) -> None:
+    """Refuse an unknown or incomplete backend rather than defaulting silently.
+
+    A wrong value must fail loud: silently reading an unknown backend as SQLite would point a
+    deployment at a local file it never meant to use, and a missing DSN would leave a Postgres
+    deployment with no store at all. Mirrors Munnin's own check.
+    """
+    if config.db_backend not in {"sqlite", "postgres"}:
+        raise StoreBackendError(
+            f"HERMOD_DB_BACKEND={config.db_backend!r} is not 'sqlite' or 'postgres'."
+        )
+    if config.db_backend == "postgres" and not config.db_url:
+        raise StoreBackendError(
+            "HERMOD_DB_BACKEND=postgres requires HERMOD_DB_URL (a PostgreSQL DSN)."
+        )
+
+
+def _build_project_repository(config: Config) -> ProjectRepository:
+    """The store for the configured backend (both satisfy the Protocol).
+
+    SQLite is the local and test path; Postgres is the deployed one, a second database on the
+    instance the memory store lives on. Nothing above this line knows which is in play, which is
+    the whole point of the seam.
+    """
+    if config.db_backend == "postgres":
+        return PostgresProjectRepository(config.db_url)
+    return SqliteProjectRepository(config.db_path)
+
+
 async def health(request: Request) -> JSONResponse:
     """Liveness: the service name and its version, and nothing read from anywhere.
 
     Open by construction. It sits on the parent app while the guard sits on the mounted MCP face
-    (authentication is enforced at the transport there), so this route never passes through it.
+    (authentication is enforced at the transport there), so this route never passes through it,
+    and it reads nothing from the store — so it is also honest about what it proves.
     """
     return JSONResponse({"status": "ok", "service": "hermod", "version": __version__})
 
@@ -266,12 +302,13 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
     """
     config = config or load_config()
     auth = auth if auth is not None else build_auth(config)
+    _validate_backend(config)
     content = ContentLoader(
         [ContentSource(name="overlay", root=config.content_root)],
         backend_doc=config.backend_doc,
     )
     service = ContextService(
-        SqliteProjectRepository(config.db_path),
+        _build_project_repository(config),
         # The stamps come from the served templates themselves, so the gate can never drift from
         # what a client was told to read.
         {name: content.template_version(name) for name in content.list_resources()},

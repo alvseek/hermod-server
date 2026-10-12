@@ -47,8 +47,18 @@ class Config:
     # The storage backend document served prompts compose onto (repo-relative to content_root).
     backend_doc: str = DEFAULT_BACKEND_DOC
     # Hermod's own store: project-keyed memory (context entries, the orientation map).
-    # Gitignored runtime data, one writer.
+    # Gitignored runtime data, one writer. Used when ``db_backend`` is ``sqlite``, which is the
+    # local and test path; the deployed store is the Postgres database below.
     db_path: Path = Path("data/hermod.db")
+    # Which store backend the server uses: ``sqlite`` (the default, for local runs and tests) or
+    # ``postgres`` (the deployed store). An unknown value is refused at startup, never silently
+    # treated as SQLite: a wrong backend must fail loud rather than point the server at a store
+    # nobody meant to use. Mirrors Munnin's ``db_backend``, for the same reason.
+    db_backend: str = "sqlite"
+    # PostgreSQL DSN, required when ``db_backend`` is ``postgres`` and ignored otherwise. It
+    # carries the database password, so it is the one secret this server holds and the only
+    # value the deploy keeps out of plain config.
+    db_url: str = ""
     # Logto tenant endpoint, e.g. "https://auth.lok.quest" (Console -> Settings -> Domains). When
     # set, Logto mints the tokens the MCP face verifies. The OIDC paths beneath it are fixed by
     # Logto, so they are derived rather than configured.
@@ -96,6 +106,8 @@ def load_config() -> Config:
         content_root=Path(os.getenv("HERMOD_CONTENT_ROOT", "agent-memory-project")),
         backend_doc=os.getenv("HERMOD_BACKEND_DOC", DEFAULT_BACKEND_DOC),
         db_path=Path(os.getenv("HERMOD_DB_PATH", "data/hermod.db")),
+        db_backend=os.getenv("HERMOD_DB_BACKEND", "sqlite").strip().lower(),
+        db_url=os.getenv("HERMOD_DB_URL", ""),
         logto_endpoint=os.getenv("HERMOD_LOGTO_ENDPOINT", ""),
         logto_audience=tuple(
             entry.strip()

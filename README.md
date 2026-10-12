@@ -54,9 +54,18 @@ Hermod has no tenancy. Munnin keys its store by the caller's `(iss, sub)`; Hermo
 
 The deployment lives in a separate private repo, `hermod-deploy`, which pins this one as a submodule. Its CI publishes `ghcr.io/alvseek/hermod` tagged by commit SHA and deploys a tag that already exists.
 
+## The store
+
+Hermod owns project-keyed memory: context entries and the orientation map. Which engine holds it is configuration, because the two halves of the fleet need different ones:
+
+- **SQLite** (`HERMOD_DB_BACKEND=sqlite`, the default) for local runs and tests. Needs no service, and the file is gitignored.
+- **Postgres** (`HERMOD_DB_BACKEND=postgres` plus `HERMOD_DB_URL`) for the deployment: a second database on the instance the memory store lives on, not a schema inside it, which is what keeps the two stores' migration runners from sharing one history table.
+
+Both satisfy the same `ProjectRepository` Protocol, and `tests/test_store_backends.py` runs one contract against both engines, so a behaviour that differs between them is a failing test rather than a surprise. Migrations apply lazily on the store's first connection, so a fresh database needs no separate step.
+
 ## Status
 
-Local and hosted forms both work. The composition pipeline, the MCP surface and the project store were built in that order; [ADR-024](https://github.com/alvseek/agent-memory-project/blob/main/docs/adr/2026-10-12-hermod-doc-extraction-and-hermod-server.md) records what this server is for, and [ADR-025](https://github.com/alvseek/agent-memory-project/blob/main/docs/adr/2026-10-12-hermod-auth-and-hosting.md) records why it grew a guarded, hosted shape.
+Local and hosted forms both work, and the store runs on both engines. The composition pipeline, the MCP surface and the project store were built in that order. [ADR-024](https://github.com/alvseek/agent-memory-project/blob/main/docs/adr/2026-10-12-hermod-doc-extraction-and-hermod-server.md) records what this server is for, [ADR-025](https://github.com/alvseek/agent-memory-project/blob/main/docs/adr/2026-10-12-hermod-auth-and-hosting.md) records why it grew a guarded, hosted shape, and [ADR-026](https://github.com/alvseek/agent-memory-project/blob/main/docs/adr/2026-10-12-hermod-store-on-the-shared-instance.md) records where its store lives.
 
 ## License
 

@@ -11,6 +11,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=3.4.6",
+    "psycopg[binary,pool]>=3.3.6",
     "starlette>=1.6",
     "uvicorn>=0.52.1",
 ]
@@ -39,6 +40,9 @@ select = ["E", "F", "I"]  # pycodestyle, pyflakes, isort
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "postgres: requires a running PostgreSQL (set HERMOD_PG_TEST_URL)",
+]
 testpaths = ["tests"]
 # The repo root on sys.path, so tests can import the package without an install step.
 pythonpath = ["."]

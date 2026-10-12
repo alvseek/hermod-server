@@ -124,6 +124,37 @@ def test_the_served_templates_carry_a_version_stamp(loader: ContentLoader) -> No
         assert stamp, f"template {name!r} carries no template_version stamp"
 
 
+def test_no_served_resource_reads_as_metadata(loader: ContentLoader) -> None:
+    """A resource's menu text must be the template's prose, never its bookkeeping.
+
+    Both shapes are checked because the framework serves both: a template can lead with a
+    ``template_version`` stamp or with a frontmatter block, and either one reaching a client's
+    picker is the fault this pins.
+    """
+    for name in loader.list_resources():
+        title = loader.title_resource(name)
+        description = loader.describe_resource(name)
+        assert title and not title.startswith("["), name
+        assert description, name
+        assert not description.startswith("---"), name
+        assert not description.startswith("template_version"), name
+
+
+def test_a_metadata_leading_template_still_reads_as_prose(tmp_path: Path) -> None:
+    """The skip is by shape, so a template that is not in front of us today is covered too."""
+    root = tmp_path / "checkout"
+    (root / "templates").mkdir(parents=True)
+    (root / "templates" / "stamped.md").write_text(
+        "# Stamped\n\ntemplate_version: 2026-01-01-00-00\n\nWhat it is for.\n", encoding="utf-8"
+    )
+    (root / "templates" / "frontmatter.md").write_text(
+        '---\nproject: "p"\n---\n\n# Front\n\nWhat it is for.\n', encoding="utf-8"
+    )
+    loader = ContentLoader([ContentSource(name="x", root=root)])
+    assert loader.describe_resource("stamped") == "What it is for."
+    assert loader.describe_resource("frontmatter") == "What it is for."
+
+
 def test_an_unstamped_template_reads_as_none(tmp_path: Path) -> None:
     """``None`` is how a template without a stamp answers, and the store refuses on it."""
     root = tmp_path / "checkout"

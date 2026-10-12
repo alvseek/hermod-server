@@ -76,6 +76,10 @@ _OP_DEF_RE = re.compile(r"^#{1,6}\s*§\s*([a-z][a-z0-9-]*)", re.MULTILINE)
 # The stamp a template carries below its title, read here and never stored. It exists so a writer
 # can prove it read the template it follows, which is the gate the store enforces.
 _TEMPLATE_VERSION_RE = re.compile(r"^template_version:\s*(\S+)\s*$", re.MULTILINE)
+# A block of YAML frontmatter, which is metadata in the same sense. One served template may lead
+# with either shape, so the description derivation skips by shape rather than by the one it happens
+# to see today.
+_FRONTMATTER_BLOCK = re.compile(r"^---\n.*\n---$", re.DOTALL)
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _MD_EMPHASIS = re.compile(r"\*\*|\*|`")
@@ -120,11 +124,18 @@ def _lead_sentence(text: str) -> str:
     Every procedure opens with its ``#`` title and then a paragraph whose first sentence says
     what the procedure is for; the storage-backend caveat is always a later sentence, so stopping
     at the first one drops the part no client needs. Returns ``""`` when there is no prose.
+
+    **Metadata is skipped, by shape rather than by example.** A bare ``template_version:`` stamp
+    line is not prose, which is the rule Munnin's loader already applies to its own templates, and
+    a leading YAML frontmatter block is the same kind of thing in the shape this overlay's
+    templates use. Either way the reader gets the template's prose, never its bookkeeping.
     """
     body = text.replace("\r\n", "\n")
     for block in body.split("\n\n"):
         paragraph = " ".join(block.split())
         if not paragraph or paragraph.startswith("#"):
+            continue
+        if _TEMPLATE_VERSION_RE.fullmatch(paragraph) or _FRONTMATTER_BLOCK.match(block.strip()):
             continue
         return _plain(_first_sentence(paragraph)).strip()
     return ""

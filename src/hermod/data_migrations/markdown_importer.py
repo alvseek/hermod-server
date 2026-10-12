@@ -1,0 +1,381 @@
+"""Import the overlay's markdown project memory into Hermod's store.
+
+The one-shot path by which the markdown world becomes rows. The overlay's project memory has
+lived as files (`shared-memory/[project]/context/*.md` and
+`agent-[domain]/knowledge-base/[project]/*.md`); the store is now its home, so this reads the
+files once and writes the two tables.
+
+Four things it does deliberately:
+
+- **The whole file is the entry's content.** Hermod's contract says an entry document is the
+  file, frontmatter included, and the template's fenced block contains that frontmatter. Munnin's
+  importer strips it instead, because its columns carry everything a record's reader needs. Copying
+  that behaviour here would quietly drop the frontmatter from every entry and from every document
+  read back out again.
+- **`description` and `tags` are read *out* of that frontmatter as well**, because they are the
+  frontmatter the context index line renders. The content keeps them too; the columns are a
+  projection, not a replacement.
+- **The directory names the project, never the frontmatter.** The path is the addressing the
+  markdown backend itself uses (`[project-name]`), so a file whose frontmatter disagrees is
+  imported under its directory and reported, rather than having the disagreement resolved silently.
+- **It writes through the repository, not the service.** Every `§ op` the served backend names is
+  gated on the template's `template_version` stamp, which is a rule for tool callers that must
+  prove they read the template. Imported data predates that gate and carries its own shape, so the
+  gate would refuse the entire import; the repository is the seam below it.
+
+Idempotent by construction: an entry or map already present is skipped and counted, so a second run
+is a no-op and a partially failed run can be repeated.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from hermod.app import build_project_repository, validate_backend
+from hermod.configuration.config import load_config
+from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
+from hermod.data_repositories.project_repository import ProjectRepository
+
+#: The index file, which is a projection of the entries rather than one of them: the markdown
+#: backend writes it beside them and the store derives it from the rows.
+CONTEXT_INDEX_STEM = "context-index"
+#: The map's filename inside a shared context directory. A map is its own entity, not an entry.
+ORIENTATION_MAP_STEM = "orientation-map"
+_FRONTMATTER_DELIM = "---"
+
+
+@dataclass(frozen=True)
+class EntrySource:
+    """One markdown entry file, and the identity the store will hold it under."""
+
+    path: Path
+    project: str
+    scope: ContextScope
+
+
+@dataclass(frozen=True)
+class MapSource:
+    """One markdown orientation map, and the project it belongs to."""
+
+    path: Path
+    project: str
+
+
+@dataclass
+class ImportReport:
+    """What an import (or a dry run of one) found and did."""
+
+    entries_created: int = 0
+    entries_skipped: int = 0
+    entries_collided: int = 0
+    maps_created: int = 0
+    maps_skipped: int = 0
+    failed: list[str] = field(default_factory=list)
+    project_mismatches: list[str] = field(default_factory=list)
+    collisions: list[str] = field(default_factory=list)
+
+    def lines(self) -> list[str]:
+        out = [
+            f"entries: {self.entries_created + self.entries_skipped} "
+            f"({self.entries_created} written, "
+            f"{self.entries_skipped - self.entries_collided} already present, "
+            f"{self.entries_collided} colliding)",
+            f"maps:    {self.maps_created + self.maps_skipped} "
+            f"({self.maps_created} written, {self.maps_skipped} already present)",
+        ]
+        if self.collisions:
+            out.append(
+                f"entries two files both claim, so only the first is written "
+                f"({len(self.collisions)}):"
+            )
+            out.extend(f"  {c}" for c in self.collisions)
+        if self.project_mismatches:
+            out.append(
+                "frontmatter project disagrees with the directory "
+                f"({len(self.project_mismatches)}):"
+            )
+            out.extend(f"  {m}" for m in self.project_mismatches)
+        if self.failed:
+            out.append(f"failed ({len(self.failed)}):")
+            out.extend(f"  {f}" for f in self.failed)
+        return out
+
+
+# --- reading -------------------------------------------------------------------------
+
+
+def frontmatter(text: str) -> dict[str, object]:
+    """The metadata a document carries above its body, or ``{}`` when it carries none.
+
+    A deliberate subset of YAML rather than a parser, the same subset Munnin's importer reads:
+    the store authors a fixed shape, so a scalar (`project: x`) and an inline list
+    (`tags: [a, b]`) are all that has to parse. Anything else is skipped rather than guessed at,
+    because a wrong value (a project that is not the project) is worse than a missing one.
+
+    Unlike Munnin's, this does **not** separate the body out: an entry's content is the whole
+    document here, so the caller keeps the text and only reads the metadata out of it.
+    """
+    lines = text.lstrip("\ufeff").split("\n")
+    if not lines or lines[0].strip() != _FRONTMATTER_DELIM:
+        return {}
+    close = next(
+        (i for i in range(1, len(lines)) if lines[i].strip() == _FRONTMATTER_DELIM), None
+    )
+    if close is None:
+        return {}
+    meta: dict[str, object] = {}
+    for raw in lines[1:close]:
+        line = raw.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if value.startswith("[") and value.endswith("]"):
+            meta[key] = [v.strip().strip("\"'") for v in value[1:-1].split(",") if v.strip()]
+        else:
+            meta[key] = value.strip("\"'")
+    return meta
+
+
+def _mtime_iso(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(
+        timespec="seconds"
+    )
+
+
+def _dates(meta: dict[str, object], path: Path) -> tuple[str, str]:
+    """``(created, modified)`` from the authored metadata, falling back to the file's mtime.
+
+    The authored value is kept as written, which for most of these files is a bare date. Nothing
+    orders by these columns (every read is a filtered list ordered by scope and theme), so
+    normalising them would be inventing precision the files never had.
+    """
+    created = str(meta.get("created") or "").strip() or _mtime_iso(path)
+    modified = (
+        str(meta.get("updated") or meta.get("last_full_scan") or "").strip() or created
+    )
+    return created, modified
+
+
+def parse_entry(source: EntrySource) -> ContextEntry:
+    """The entry a markdown file holds, content kept whole."""
+    text = source.path.read_text(encoding="utf-8")
+    meta = frontmatter(text)
+    created, modified = _dates(meta, source.path)
+    tags = meta.get("tags")
+    description = meta.get("description")
+    return ContextEntry(
+        project=source.project,
+        scope=source.scope,
+        theme=source.path.stem,
+        full_content=text,
+        description=str(description) if description else None,
+        tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],
+        created_date=created,
+        modified_date=modified,
+    )
+
+
+def parse_map(source: MapSource) -> OrientationMap:
+    """The orientation map a markdown file holds, content kept whole."""
+    text = source.path.read_text(encoding="utf-8")
+    meta = frontmatter(text)
+    created, modified = _dates(meta, source.path)
+    description = meta.get("description")
+    return OrientationMap(
+        project=source.project,
+        full_content=text,
+        description=str(description) if description else None,
+        created_date=created,
+        modified_date=modified,
+    )
+
+
+# --- discovery -----------------------------------------------------------------------
+
+
+def discover(source_root: Path) -> tuple[list[EntrySource], list[MapSource]]:
+    """Every entry and map beneath ``source_root``, the memory store's own root.
+
+    Two shapes, each with its own marker for "this directory is a project's home":
+
+    - **shared** — `<root>/shared-memory/<project>/context/`, whose existence is the marker.
+      `context-index.md` is the projection and `orientation-map.md` is the map, so neither is an
+      entry.
+    - **private** — `<root>/agent-<domain>/knowledge-base/<project>/`, marked by a
+      `context-index.md` beside the entries. That file is what separates a project-context home
+      from a general-knowledge one, which is the same test the memory store's own importer uses to
+      keep project-scoped knowledge out of the core.
+    """
+    entries: list[EntrySource] = []
+    maps: list[MapSource] = []
+
+    shared = source_root / "shared-memory"
+    if shared.is_dir():
+        for project_dir in sorted(p for p in shared.iterdir() if p.is_dir()):
+            context = project_dir / "context"
+            if not context.is_dir():
+                continue
+            for path in sorted(context.glob("*.md")):
+                if path.stem == CONTEXT_INDEX_STEM:
+                    continue
+                if path.stem == ORIENTATION_MAP_STEM:
+                    maps.append(MapSource(path=path, project=project_dir.name))
+                    continue
+                entries.append(
+                    EntrySource(
+                        path=path, project=project_dir.name, scope=ContextScope.shared
+                    )
+                )
+
+    for agent_dir in sorted(p for p in source_root.glob("agent-*") if p.is_dir()):
+        knowledge = agent_dir / "knowledge-base"
+        if not knowledge.is_dir():
+            continue
+        for project_dir in sorted(p for p in knowledge.iterdir() if p.is_dir()):
+            if not (project_dir / f"{CONTEXT_INDEX_STEM}.md").is_file():
+                continue
+            for path in sorted(project_dir.glob("*.md")):
+                if path.stem in {CONTEXT_INDEX_STEM, ORIENTATION_MAP_STEM}:
+                    continue
+                entries.append(
+                    EntrySource(
+                        path=path, project=project_dir.name, scope=ContextScope.private
+                    )
+                )
+
+    return entries, maps
+
+
+# --- importing -----------------------------------------------------------------------
+
+
+def import_markdown(
+    repo: ProjectRepository, source_root: Path, *, dry_run: bool = False
+) -> ImportReport:
+    """Write every discovered entry and map through ``repo``; report what happened.
+
+    A read-only pass when ``dry_run`` is set, except for one thing worth stating: reading needs
+    the schema, so the first connection applies any pending migration even on a dry run. It
+    creates tables and touches no rows.
+    """
+    entries, maps = discover(source_root)
+    report = ImportReport()
+
+    # Claimed as they are read, not as they are written, so two files wanting one row are caught
+    # whether the run writes or not. That case is not an error in the data: the markdown layout
+    # keeps private context per agent (`agent-[domain]/knowledge-base/[project]/`) while the
+    # store's identity is `(project, scope, theme)`, so a theme two agents both wrote has one row
+    # available and the importer can only keep the first. It says so rather than counting it as
+    # already present, because the two mean different things.
+    claimed: dict[tuple[str, str, str], Path] = {}
+
+    for source in entries:
+        try:
+            entry = parse_entry(source)
+        except (OSError, UnicodeDecodeError) as exc:
+            report.failed.append(f"{source.path}: {exc}")
+            continue
+
+        authored = frontmatter(entry.full_content).get("project")
+        if authored and str(authored) != source.project:
+            report.project_mismatches.append(
+                f"{source.path}: frontmatter says {authored!r}, directory says "
+                f"{source.project!r} (imported under the directory)"
+            )
+
+        identity = (entry.project, entry.scope.value, entry.theme)
+        holder = claimed.get(identity)
+        if holder is not None:
+            report.entries_collided += 1
+            report.entries_skipped += 1
+            report.collisions.append(f"{source.path} (already claimed by {holder})")
+            continue
+        claimed[identity] = source.path
+
+        try:
+            if _entry_present(repo, entry):
+                report.entries_skipped += 1
+            elif dry_run:
+                report.entries_created += 1
+            else:
+                repo.create_context_entry(entry)
+                report.entries_created += 1
+        except ValueError:
+            # The store refused the create, which for a create means the identity is taken. A
+            # dry run cannot see this one, since it never writes; both count it the same way.
+            report.entries_skipped += 1
+        except Exception as exc:  # noqa: BLE001 — a bad file must not end the run
+            report.failed.append(f"{source.path}: {exc}")
+
+    for source in maps:
+        try:
+            orientation_map = parse_map(source)
+        except (OSError, UnicodeDecodeError) as exc:
+            report.failed.append(f"{source.path}: {exc}")
+            continue
+        try:
+            if repo.map_exists(project=source.project):
+                report.maps_skipped += 1
+            elif dry_run:
+                report.maps_created += 1
+            else:
+                repo.create_map(orientation_map)
+                report.maps_created += 1
+        except ValueError:
+            report.maps_skipped += 1
+        except Exception as exc:  # noqa: BLE001
+            report.failed.append(f"{source.path}: {exc}")
+
+    return report
+
+
+def _entry_present(repo: ProjectRepository, entry: ContextEntry) -> bool:
+    return (
+        repo.get_context_entry(project=entry.project, scope=entry.scope, theme=entry.theme)
+        is not None
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Import the overlay's markdown project memory into Hermod's store."
+    )
+    parser.add_argument(
+        "--source",
+        required=True,
+        help="the memory root: the checkout holding shared-memory/ and agent-*/",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be written and touch no rows",
+    )
+    args = parser.parse_args(argv)
+
+    source_root = Path(args.source).expanduser()
+    if not source_root.is_dir():
+        print(f"not a directory: {source_root}")
+        return 2
+
+    # Which store is decided by the environment, never by a flag: the DSN is a secret and does
+    # not belong in a command line or in shell history.
+    config = load_config()
+    validate_backend(config)
+    repo = build_project_repository(config)
+    print(f"store: {config.db_backend}")
+    print(f"source: {source_root}")
+
+    report = import_markdown(repo, source_root, dry_run=args.dry_run)
+    verb = "would be written" if args.dry_run else "written"
+    print(f"dry run, nothing {verb}:" if args.dry_run else "imported:")
+    for line in report.lines():
+        print(f"  {line}")
+    return 1 if report.failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

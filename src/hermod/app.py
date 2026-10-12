@@ -253,7 +253,7 @@ class StoreBackendError(RuntimeError):
     """Raised when the configured store backend is unknown or incomplete."""
 
 
-def _validate_backend(config: Config) -> None:
+def validate_backend(config: Config) -> None:
     """Refuse an unknown or incomplete backend rather than defaulting silently.
 
     A wrong value must fail loud: silently reading an unknown backend as SQLite would point a
@@ -270,7 +270,7 @@ def _validate_backend(config: Config) -> None:
         )
 
 
-def _build_project_repository(config: Config) -> ProjectRepository:
+def build_project_repository(config: Config) -> ProjectRepository:
     """The store for the configured backend (both satisfy the Protocol).
 
     SQLite is the local and test path; Postgres is the deployed one, a second database on the
@@ -302,13 +302,13 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
     """
     config = config or load_config()
     auth = auth if auth is not None else build_auth(config)
-    _validate_backend(config)
+    validate_backend(config)
     content = ContentLoader(
         [ContentSource(name="overlay", root=config.content_root)],
         backend_doc=config.backend_doc,
     )
     service = ContextService(
-        _build_project_repository(config),
+        build_project_repository(config),
         # The stamps come from the served templates themselves, so the gate can never drift from
         # what a client was told to read.
         {name: content.template_version(name) for name in content.list_resources()},

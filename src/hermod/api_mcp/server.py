@@ -323,9 +323,11 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         description: str | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Replace a live context entry's content, description and tags.
+        """Replace a live context entry: its content, description and tags.
 
-        The entry must already exist, which is what keeps an update from quietly becoming a create.
+        A **wholesale replace**, exactly as the markdown backend's write-back is: `description`
+        and `tags` default to empty, so a caller that passes only `content` clears them. The entry
+        must already exist, which is what keeps an update from quietly becoming a create.
         """
         entry = service.update_context_entry(
             project=project,

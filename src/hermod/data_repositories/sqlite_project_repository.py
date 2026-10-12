@@ -189,6 +189,11 @@ class SqliteProjectRepository:
                     (to_scope.value, _now(), project, theme, from_scope.value),
                 )
             except sqlite3.IntegrityError as exc:
+                # Narrowed, as ``create_context_entry`` and ``create_map`` are: the partial unique
+                # index is the only constraint this statement can violate today, and a blanket
+                # catch would report some future one as a collision.
+                if "UNIQUE constraint failed" not in str(exc):
+                    raise
                 raise ValueError(
                     f"cannot move {theme!r} to {to_scope.value}: a live "
                     f"{to_scope.value} entry already holds that theme in {project!r}"

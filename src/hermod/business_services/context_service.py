@@ -92,7 +92,11 @@ class ContextService:
         description: str | None = None,
         tags: Sequence[str] | None = None,
     ) -> ContextEntry:
-        """Replace a live entry's body, description and tags. Refuses an oversized body."""
+        """Replace a live entry's body, description and tags. Refuses an oversized body.
+
+        A wholesale replace, matching the markdown backend's write-back of the whole entry:
+        an omitted ``description`` or ``tags`` clears it rather than preserving the stored value.
+        """
         self._refuse_oversized(content)
         return self._repository.update_context_entry(
             ContextEntry(

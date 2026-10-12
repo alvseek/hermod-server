@@ -295,20 +295,24 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         scope: str,
         theme: str,
         content: str,
+        template_version: str,
         description: str | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create one context entry from a filled-in project-context template.
 
-        `content` is the whole document, frontmatter included. `description` and `tags` are the
-        frontmatter the context index shows, so pass them and the listing can tell entries apart.
-        Refuses an entry over the line cap, and an identity that is already taken.
+        Read `project-context-template` first and pass the `template_version` stamp it carries: it
+        is a gate, not content, and no stored entry carries it. `content` is the whole document,
+        frontmatter included, minus that stamp. `description` and `tags` are the frontmatter the
+        context index shows, so pass them and the listing can tell entries apart. Refuses an entry
+        over the line cap, a missing or stale stamp, and an identity that is already taken.
         """
         entry = service.create_context_entry(
             project=project,
             scope=_scope_arg(scope),
             theme=theme,
             content=content,
+            template_version=template_version,
             description=description,
             tags=tags,
         )
@@ -320,20 +324,24 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         scope: str,
         theme: str,
         content: str,
+        template_version: str,
         description: str | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Replace a live context entry: its content, description and tags.
 
-        A **wholesale replace**, exactly as the markdown backend's write-back is: `description`
-        and `tags` default to empty, so a caller that passes only `content` clears them. The entry
-        must already exist, which is what keeps an update from quietly becoming a create.
+        Read `project-context-template` first and pass its `template_version` stamp, exactly as the
+        create does: an update restates the whole document. A **wholesale replace**, exactly as the
+        markdown backend's write-back is: `description` and `tags` default to empty, so a caller
+        that passes only `content` clears them. The entry must already exist, which is what keeps
+        an update from quietly becoming a create.
         """
         entry = service.update_context_entry(
             project=project,
             scope=_scope_arg(scope),
             theme=theme,
             content=content,
+            template_version=template_version,
             description=description,
             tags=tags,
         )
@@ -398,20 +406,35 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         }
 
     @mcp.tool(title="Create the orientation map", annotations=_WRITE)
-    def create_map(project: str, content: str, description: str | None = None) -> dict[str, Any]:
+    def create_map(
+        project: str, content: str, template_version: str, description: str | None = None
+    ) -> dict[str, Any]:
         """Create the project's orientation map, from the orientation-map template.
 
-        Refuses a second map: a project has one, and it is edited thereafter.
+        Read `orientation-map-template` first and pass the `template_version` stamp it carries; the
+        map never carries it. Refuses a second map (a project has one, and it is edited
+        thereafter), and a missing or stale stamp.
         """
         orientation_map = service.create_map(
-            project=project, content=content, description=description
+            project=project,
+            content=content,
+            template_version=template_version,
+            description=description,
         )
         return {"project": orientation_map.project, "created_date": orientation_map.created_date}
 
     @mcp.tool(title="Write the orientation map", annotations=_WRITE)
-    def write_map(project: str, content: str, description: str | None = None) -> dict[str, Any]:
-        """Rewrite the project's orientation map wholesale. It must exist first."""
+    def write_map(
+        project: str, content: str, template_version: str, description: str | None = None
+    ) -> dict[str, Any]:
+        """Rewrite the project's orientation map wholesale.
+
+        It must exist first, and it carries the same template stamp the create declares.
+        """
         orientation_map = service.write_map(
-            project=project, content=content, description=description
+            project=project,
+            content=content,
+            template_version=template_version,
+            description=description,
         )
         return {"project": orientation_map.project, "modified_date": orientation_map.modified_date}

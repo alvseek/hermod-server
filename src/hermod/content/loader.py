@@ -73,6 +73,10 @@ PROMPT_ARGUMENTS: dict[str, tuple[str, str]] = {
 _OP_RE = re.compile(r"§\s*([a-z][a-z0-9-]*)")
 _OP_DEF_RE = re.compile(r"^#{1,6}\s*§\s*([a-z][a-z0-9-]*)", re.MULTILINE)
 
+# The stamp a template carries below its title, read here and never stored. It exists so a writer
+# can prove it read the template it follows, which is the gate the store enforces.
+_TEMPLATE_VERSION_RE = re.compile(r"^template_version:\s*(\S+)\s*$", re.MULTILINE)
+
 _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _MD_EMPHASIS = re.compile(r"\*\*|\*|`")
 _OPENERS, _CLOSERS, _TERMINATORS = "([", ")]", ".!?"
@@ -342,6 +346,16 @@ class ContentLoader:
     def get_resource(self, name: str) -> str:
         """Return a template verbatim. Raises ``KeyError`` if absent."""
         return self._resource_path(name).read_text(encoding="utf-8")
+
+    def template_version(self, name: str) -> str | None:
+        """The ``template_version`` stamp a served template carries, or ``None`` if unstamped.
+
+        This is where served content and the store's writes meet: a writer is told to read the
+        template and declare its stamp, and this is the stamp it has to declare. ``None`` means the
+        template carries none, which the store refuses rather than waving through.
+        """
+        match = _TEMPLATE_VERSION_RE.search(self.get_resource(name))
+        return match.group(1) if match else None
 
     def title_resource(self, name: str) -> str:
         """A display title for a resource, from its own ``#`` heading."""

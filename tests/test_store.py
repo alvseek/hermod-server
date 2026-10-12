@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from pathlib import Path
 
 import pytest
 from fastmcp import Client
@@ -24,6 +25,9 @@ from hermod.content.loader import ContentLoader, ContentSource
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 from hermod.data_entities.schema_migrations import apply_migrations, known, status
 from hermod.data_repositories.sqlite_project_repository import SqliteProjectRepository
+
+ROOT = Path(__file__).resolve().parents[1]
+CONTENT = ROOT / "agent-memory-project"
 
 
 @pytest.fixture
@@ -223,10 +227,15 @@ def test_map_round_trips(repo) -> None:
 
 # --- the service layer: one test per op the served db.md names ---
 
+#: The service tests carry their own stamp, so the gate's logic is exercised without depending on
+#: whatever the served template's value happens to be. The face test below reads the real one.
+STAMP = "test-stamp"
+VERSIONS = {"project-context-template": STAMP, "orientation-map-template": STAMP}
+
 
 @pytest.fixture
 def service(repo) -> ContextService:
-    return ContextService(repo)
+    return ContextService(repo, VERSIONS)
 
 
 def test_service_create_list_and_read(service) -> None:
@@ -235,6 +244,7 @@ def test_service_create_list_and_read(service) -> None:
         scope=ContextScope.private,
         theme="deployment",
         content="# Deployment\n",
+        template_version=STAMP,
         description="how it ships",
         tags=["deploy"],
     )
@@ -260,20 +270,36 @@ def test_service_create_list_and_read(service) -> None:
 
 def test_service_update_and_move(service) -> None:
     service.create_context_entry(
-        project="p", scope=ContextScope.private, theme="t", content="one\n"
+        project="p",
+        scope=ContextScope.private,
+        theme="t",
+        content="one\n",
+        template_version=STAMP,
     )
     service.update_context_entry(
-        project="p", scope=ContextScope.private, theme="t", content="two\n"
+        project="p",
+        scope=ContextScope.private,
+        theme="t",
+        content="two\n",
+        template_version=STAMP,
     )
-    moved = service.move_context_entry(
+    promoted = service.move_context_entry(
         project="p", theme="t", from_scope=ContextScope.private, to_scope=ContextScope.shared
     )
-    assert moved.scope is ContextScope.shared
-    assert moved.full_content == "two\n"  # the move touched the scope, not the body
+    assert promoted.scope is ContextScope.shared
+    assert promoted.full_content == "two\n"  # the move touched the scope, not the body
+
+    demoted = service.move_context_entry(
+        project="p", theme="t", from_scope=ContextScope.shared, to_scope=ContextScope.private
+    )
+    assert demoted.scope is ContextScope.private
+    assert demoted.full_content == "two\n"  # and it is symmetric, as the op's name promises
 
 
 def test_service_delete(service) -> None:
-    service.create_context_entry(project="p", scope=ContextScope.shared, theme="t", content="x\n")
+    service.create_context_entry(
+        project="p", scope=ContextScope.shared, theme="t", content="x\n", template_version=STAMP
+    )
     service.delete_context_entry(project="p", scope=ContextScope.shared, theme="t")
     assert service.list_context_entries(project="p") == []
 
@@ -287,20 +313,63 @@ def test_check_entry_size_measures_and_create_refuses(service) -> None:
 
     with pytest.raises(ValueError, match="over the"):
         service.create_context_entry(
-            project="p", scope=ContextScope.shared, theme="huge", content=huge
+            project="p",
+            scope=ContextScope.shared,
+            theme="huge",
+            content=huge,
+            template_version=STAMP,
         )
     with pytest.raises(ValueError, match="over the"):
         service.update_context_entry(
-            project="p", scope=ContextScope.shared, theme="huge", content=huge
+            project="p",
+            scope=ContextScope.shared,
+            theme="huge",
+            content=huge,
+            template_version=STAMP,
+        )
+
+
+def test_a_missing_or_stale_template_stamp_is_refused(service) -> None:
+    """``§ template``: a document write proves it read the template, or it does not happen."""
+    with pytest.raises(ValueError, match="template_version is required"):
+        service.create_context_entry(
+            project="p", scope=ContextScope.shared, theme="t", content="x\n", template_version=""
+        )
+    with pytest.raises(ValueError, match="does not match the served"):
+        service.create_context_entry(
+            project="p",
+            scope=ContextScope.shared,
+            theme="t",
+            content="x\n",
+            template_version="2020-01-01-00-00",
+        )
+    with pytest.raises(ValueError, match="does not match the served"):
+        service.create_map(project="p", content="# Map\n", template_version="stale")
+    # None of the three refusals wrote anything.
+    assert service.list_context_entries(project="p") == []
+    assert service.map_exists(project="p") is False
+
+
+def test_an_unserved_template_cannot_be_checked(service) -> None:
+    """A service with no served stamps refuses rather than waving the write through: the gate's
+    whole point is that a caller cannot store a document it never read."""
+    bare = ContextService(service._repository)
+    with pytest.raises(ValueError, match="is not served"):
+        bare.create_context_entry(
+            project="p",
+            scope=ContextScope.shared,
+            theme="t",
+            content="x\n",
+            template_version=STAMP,
         )
 
 
 def test_service_map_ops(service) -> None:
     assert service.map_exists(project="p") is False
     assert service.read_map(project="p") is None
-    service.create_map(project="p", content="# Map\n")
+    service.create_map(project="p", content="# Map\n", template_version=STAMP)
     assert service.map_exists(project="p") is True
-    written = service.write_map(project="p", content="# Map 2\n")
+    written = service.write_map(project="p", content="# Map 2\n", template_version=STAMP)
     assert written.full_content == "# Map 2\n"
     assert service.read_map(project="p").full_content == "# Map 2\n"
 
@@ -315,19 +384,42 @@ def test_an_unknown_scope_is_named() -> None:
 # --- the same ops through the MCP face ---
 
 
-async def test_every_store_tool_round_trips_without_an_overlay(tmp_path) -> None:
-    """The store is a local file, so it is served whether or not an overlay checkout is present.
-
-    Every op ``db.md`` names is exercised here through the tool the served mechanic will call, so a
-    missing registration fails the test by raising rather than by a name drifting out of a list.
-    """
+async def test_the_store_reads_without_an_overlay_and_refuses_its_writes(tmp_path) -> None:
+    """A local store's reads need no checkout. Its writes do: the stamp gate needs the template
+    that carries it, which is the price of being able to check that a caller read one."""
     loader = ContentLoader([ContentSource(name="absent", root=tmp_path / "no-checkout")])
     service = ContextService(SqliteProjectRepository(tmp_path / "hermod.db"))
     mcp = build_mcp(loader, service)
 
     async with Client(mcp) as client:
         assert await client.list_prompts() == []  # no checkout, so nothing but the store
+        assert (await client.call_tool("list_context_entries", {"project": "p"})).data == []
+        with pytest.raises(Exception, match="is not served"):
+            await client.call_tool(
+                "create_context_entry",
+                {
+                    "project": "p",
+                    "scope": "shared",
+                    "theme": "t",
+                    "content": "# Entry\n",
+                    "template_version": "anything",
+                },
+            )
 
+
+async def test_every_store_tool_round_trips(tmp_path) -> None:
+    """Every op ``db.md`` names, through the tool the served mechanic will call, against the real
+    checkout and the real stamp: a missing registration fails by raising, and a stamp that has
+    drifted from the served template fails here too."""
+    loader = ContentLoader([ContentSource(name="overlay", root=CONTENT)])
+    versions = {name: loader.template_version(name) for name in loader.list_resources()}
+    entry_stamp = versions["project-context-template"]
+    map_stamp = versions["orientation-map-template"]
+    assert entry_stamp and map_stamp, "a served template carries no stamp"
+    service = ContextService(SqliteProjectRepository(tmp_path / "hermod.db"), versions)
+    mcp = build_mcp(loader, service)
+
+    async with Client(mcp) as client:
         created = (
             await client.call_tool(
                 "create_context_entry",
@@ -336,6 +428,7 @@ async def test_every_store_tool_round_trips_without_an_overlay(tmp_path) -> None
                     "scope": "shared",
                     "theme": "hermod-server-build",
                     "content": "# Entry\n",
+                    "template_version": entry_stamp,
                     "description": "what it covers",
                     "tags": ["hermod-server"],
                 },
@@ -369,12 +462,14 @@ async def test_every_store_tool_round_trips_without_an_overlay(tmp_path) -> None
                     "scope": "shared",
                     "theme": "hermod-server-build",
                     "content": "# Entry, revised\n",
+                    "template_version": entry_stamp,
                 },
             )
         ).data
         assert updated["theme"] == "hermod-server-build"
 
-        moved = (
+        # Both directions of the move, because the op's name promises symmetry.
+        demoted = (
             await client.call_tool(
                 "move_context_entry",
                 {
@@ -385,7 +480,19 @@ async def test_every_store_tool_round_trips_without_an_overlay(tmp_path) -> None
                 },
             )
         ).data
-        assert moved["scope"] == "private"
+        assert demoted["scope"] == "private"
+        promoted = (
+            await client.call_tool(
+                "move_context_entry",
+                {
+                    "project": "agent-memory-project",
+                    "theme": "hermod-server-build",
+                    "from_scope": "private",
+                    "to_scope": "shared",
+                },
+            )
+        ).data
+        assert promoted["scope"] == "shared"
 
         size = (await client.call_tool("check_entry_size", {"content": "a\nb\n"})).data
         assert size == {"lines": 2, "max_lines": MAX_ENTRY_LINES, "oversized": False}
@@ -394,10 +501,20 @@ async def test_every_store_tool_round_trips_without_an_overlay(tmp_path) -> None
             await client.call_tool("map_exists", {"project": "agent-memory-project"})
         ).data["exists"] is False
         await client.call_tool(
-            "create_map", {"project": "agent-memory-project", "content": "# Map\n"}
+            "create_map",
+            {
+                "project": "agent-memory-project",
+                "content": "# Map\n",
+                "template_version": map_stamp,
+            },
         )
         await client.call_tool(
-            "write_map", {"project": "agent-memory-project", "content": "# Map, revised\n"}
+            "write_map",
+            {
+                "project": "agent-memory-project",
+                "content": "# Map, revised\n",
+                "template_version": map_stamp,
+            },
         )
         served_map = (
             await client.call_tool("read_map", {"project": "agent-memory-project"})
@@ -409,7 +526,7 @@ async def test_every_store_tool_round_trips_without_an_overlay(tmp_path) -> None
                 "delete_context_entry",
                 {
                     "project": "agent-memory-project",
-                    "scope": "private",
+                    "scope": "shared",
                     "theme": "hermod-server-build",
                 },
             )

@@ -44,7 +44,12 @@ def build_app(config: Config | None = None) -> Starlette:
         [ContentSource(name="overlay", root=config.content_root)],
         backend_doc=config.backend_doc,
     )
-    service = ContextService(SqliteProjectRepository(config.db_path))
+    service = ContextService(
+        SqliteProjectRepository(config.db_path),
+        # The stamps come from the served templates themselves, so the gate can never drift from
+        # what a client was told to read.
+        {name: content.template_version(name) for name in content.list_resources()},
+    )
     mcp_app = build_mcp(content, service).http_app(path="/")
 
     return Starlette(

@@ -117,6 +117,22 @@ def test_a_resource_is_served_verbatim(loader: ContentLoader) -> None:
     assert served == on_disk
 
 
+def test_the_served_templates_carry_a_version_stamp(loader: ContentLoader) -> None:
+    """Every served template must carry a stamp: it is what a store write has to declare."""
+    for name in loader.list_resources():
+        stamp = loader.template_version(name)
+        assert stamp, f"template {name!r} carries no template_version stamp"
+
+
+def test_an_unstamped_template_reads_as_none(tmp_path: Path) -> None:
+    """``None`` is how a template without a stamp answers, and the store refuses on it."""
+    root = tmp_path / "checkout"
+    (root / "templates").mkdir(parents=True)
+    (root / "templates" / "plain.md").write_text("# Plain\n\nNo stamp here.\n", encoding="utf-8")
+    loader = ContentLoader([ContentSource(name="x", root=root)])
+    assert loader.template_version("plain") is None
+
+
 def test_an_absent_checkout_serves_nothing(tmp_path: Path) -> None:
     """A server without content still boots; it simply has none."""
     empty = ContentLoader([ContentSource(name="gone", root=tmp_path / "nope")])

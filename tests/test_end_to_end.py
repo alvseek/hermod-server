@@ -105,6 +105,9 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
     round trip across both proves the store is reachable from the served face over real HTTP, and
     that the scope written is the scope read.
     """
+    loader = ContentLoader([ContentSource(name="overlay", root=CONTENT)])
+    stamp = loader.template_version("project-context-template")
+    assert stamp, "the served context-entry template carries no stamp"
     async with Client(live_server) as client:
         created = (
             await client.call_tool(
@@ -114,6 +117,7 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
                     "scope": "private",
                     "theme": "hermod-server-build",
                     "content": "# Hermod Server Build\n\nWhat the build left behind.\n",
+                    "template_version": stamp,
                     "description": "the hermod-server build",
                     "tags": ["hermod-server"],
                 },

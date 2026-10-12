@@ -13,11 +13,16 @@ index and directory steps. A third, ``§ check-entry-size``, *is* code because t
 **The size cap is carried, not invented.** The markdown backend splits an entry that grows past
 1000 lines into one file per sub-theme; the store has no second file to split into, so it refuses
 the write instead. Same threshold, different remedy, because the medium differs.
+
+**The template stamp is a gate, not content.** Every write that supplies a whole document must
+declare the stamp its served template carries, so a caller that never read the template cannot
+write one. The stamp is never stored, which is the memory core's own rule applied to a store that
+keeps whole documents rather than blocks.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
@@ -25,6 +30,11 @@ from hermod.data_repositories.project_repository import ProjectRepository
 
 #: The markdown backend's split point, carried here as a refusal point.
 MAX_ENTRY_LINES = 1000
+
+#: The served template each document-supplying write must have read. Keys are the loader's
+#: resource names, because those are what a caller is told to read.
+_ENTRY_TEMPLATE = "project-context-template"
+_MAP_TEMPLATE = "orientation-map-template"
 
 
 @dataclass(frozen=True)
@@ -39,8 +49,15 @@ class SizeVerdict:
 class ContextService:
     """The ops over project context entries and the orientation map."""
 
-    def __init__(self, repository: ProjectRepository) -> None:
+    def __init__(
+        self,
+        repository: ProjectRepository,
+        template_versions: Mapping[str, str | None] | None = None,
+    ) -> None:
         self._repository = repository
+        #: Served resource name -> the stamp it carries. Built from the loader, so the expected
+        #: stamp is always the template's own and never a second copy that could drift from it.
+        self._template_versions: dict[str, str | None] = dict(template_versions or {})
 
     # --- update-project-context / load-project-context ---
 
@@ -65,12 +82,14 @@ class ContextService:
         scope: ContextScope,
         theme: str,
         content: str,
+        template_version: str,
         description: str | None = None,
         tags: Sequence[str] | None = None,
     ) -> ContextEntry:
-        """Create one entry. Refuses an oversized body (``§ check-entry-size``) and an identity
-        that is already taken."""
+        """Create one entry. Refuses an oversized body (``§ check-entry-size``), a missing or stale
+        template stamp (``§ template``), and an identity that is already taken."""
         self._refuse_oversized(content)
+        self._refuse_stale_template(_ENTRY_TEMPLATE, template_version)
         return self._repository.create_context_entry(
             ContextEntry(
                 project=project,
@@ -89,15 +108,19 @@ class ContextService:
         scope: ContextScope,
         theme: str,
         content: str,
+        template_version: str,
         description: str | None = None,
         tags: Sequence[str] | None = None,
     ) -> ContextEntry:
-        """Replace a live entry's body, description and tags. Refuses an oversized body.
+        """Replace a live entry's body, description and tags. Refuses an oversized body, and a
+        missing or stale template stamp — it restates the whole document, so it carries the same
+        gate the create does.
 
         A wholesale replace, matching the markdown backend's write-back of the whole entry:
         an omitted ``description`` or ``tags`` clears it rather than preserving the stored value.
         """
         self._refuse_oversized(content)
+        self._refuse_stale_template(_ENTRY_TEMPLATE, template_version)
         return self._repository.update_context_entry(
             ContextEntry(
                 project=project,
@@ -146,6 +169,30 @@ class ContextService:
                 "into one entry per sub-theme and store each as its own theme"
             )
 
+    def _refuse_stale_template(self, template: str, declared: str | None) -> None:
+        """``§ template``'s gate: a document write must declare the served template's stamp.
+
+        Three refusals, named separately because they send the caller to different places: no
+        expected stamp means the template is not served at all, a missing declared stamp means the
+        caller never read it, and a mismatch means it read a different one.
+        """
+        expected = self._template_versions.get(template)
+        if expected is None:
+            raise ValueError(
+                f"template {template!r} is not served, so its stamp cannot be checked; the server "
+                "needs the overlay checkout that carries it"
+            )
+        if not declared:
+            raise ValueError(
+                f"template_version is required: read {template!r} from resources and pass the "
+                f"stamp it carries below its title ({expected!r})"
+            )
+        if declared != expected:
+            raise ValueError(
+                f"template_version {declared!r} does not match the served {template!r} "
+                f"({expected!r}); read the template again and declare its current stamp"
+            )
+
     # --- map-orientation ---
 
     def map_exists(self, *, project: str) -> bool:
@@ -157,17 +204,31 @@ class ContextService:
         return self._repository.get_map(project=project)
 
     def create_map(
-        self, *, project: str, content: str, description: str | None = None
+        self,
+        *,
+        project: str,
+        content: str,
+        template_version: str,
+        description: str | None = None,
     ) -> OrientationMap:
-        """Insert the project's map. The served ``§ create-map``; refuses a second map."""
+        """Insert the project's map. The served ``§ create-map``; refuses a second map, and a
+        missing or stale template stamp."""
+        self._refuse_stale_template(_MAP_TEMPLATE, template_version)
         return self._repository.create_map(
             OrientationMap(project=project, full_content=content, description=description)
         )
 
     def write_map(
-        self, *, project: str, content: str, description: str | None = None
+        self,
+        *,
+        project: str,
+        content: str,
+        template_version: str,
+        description: str | None = None,
     ) -> OrientationMap:
-        """Rewrite the project's map. The served ``§ write-map``."""
+        """Rewrite the project's map. The served ``§ write-map``; refuses a missing or stale
+        template stamp, since it restates the whole document."""
+        self._refuse_stale_template(_MAP_TEMPLATE, template_version)
         return self._repository.write_map(
             OrientationMap(project=project, full_content=content, description=description)
         )

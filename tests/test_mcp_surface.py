@@ -35,7 +35,10 @@ SERVED = [
 @pytest.fixture
 def mcp(tmp_path) -> FastMCP:
     content = ContentLoader([ContentSource(name="project", root=CONTENT)])
-    service = ContextService(SqliteProjectRepository(tmp_path / "hermod.db"))
+    service = ContextService(
+        SqliteProjectRepository(tmp_path / "hermod.db"),
+        {name: content.template_version(name) for name in content.list_resources()},
+    )
     return build_mcp(content, service)
 
 

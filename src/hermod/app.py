@@ -9,9 +9,9 @@ The mounted MCP app carries a lifespan — its session manager — that **must**
 parent app, or the MCP session manager never starts and the face answers nothing. That wiring is
 the reason this file exists at all.
 
-There is no HTTP API face and no auth middleware: this server serves content and liveness, and
-nothing it serves needs a credential. Adding either later is a new router rather than a flag,
-which is the point of not carrying the surface in the first place.
+There is no HTTP API face and no auth middleware: this server serves content, the project store
+and liveness, and nothing it serves needs a credential. Adding either later is a new router rather
+than a flag, which is the point of not carrying the surface in the first place.
 """
 
 from __future__ import annotations
@@ -23,8 +23,10 @@ from starlette.routing import Mount, Route
 
 from hermod import __version__
 from hermod.api_mcp.server import build_mcp
+from hermod.business_services.context_service import ContextService
 from hermod.configuration.config import Config, load_config
 from hermod.content.loader import ContentLoader, ContentSource
+from hermod.data_repositories.sqlite_project_repository import SqliteProjectRepository
 
 #: Where the MCP face is mounted, and therefore the address a client connects to.
 MCP_MOUNT_PATH = "/mcp"
@@ -42,7 +44,8 @@ def build_app(config: Config | None = None) -> Starlette:
         [ContentSource(name="overlay", root=config.content_root)],
         backend_doc=config.backend_doc,
     )
-    mcp_app = build_mcp(content).http_app(path="/")
+    service = ContextService(SqliteProjectRepository(config.db_path))
+    mcp_app = build_mcp(content, service).http_app(path="/")
 
     return Starlette(
         routes=[

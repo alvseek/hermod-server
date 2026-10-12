@@ -32,11 +32,18 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def live_server() -> Iterator[str]:
-    """A real uvicorn on a loopback port, yielding the MCP URL a client would be given."""
+def live_server(tmp_path) -> Iterator[str]:
+    """A real uvicorn on a loopback port, yielding the MCP URL a client would be given.
+
+    The store is a temp file, not the repo's runtime `data/hermod.db`: a test that writes project
+    context must not leave rows in the store an agent is using.
+    """
     port = _free_port()
     config = uvicorn.Config(
-        build_app(Config(port=port)), host="127.0.0.1", port=port, log_level="warning"
+        build_app(Config(port=port, db_path=tmp_path / "e2e.db")),
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -89,3 +96,60 @@ async def test_health_answers_on_the_live_server(live_server: str) -> None:
         response = await client.get(f"{base}/health")
     assert response.status_code == 200
     assert response.json()["service"] == "hermod"
+
+
+async def test_a_context_entry_round_trips_between_the_two_procedures(live_server: str) -> None:
+    """Step 4.4: write through one procedure's op, read back through the other's.
+
+    The two procedures call different tools — one creates an entry, the other lists and reads — so a
+    round trip across both proves the store is reachable from the served face over real HTTP, and
+    that the scope written is the scope read.
+    """
+    async with Client(live_server) as client:
+        created = (
+            await client.call_tool(
+                "create_context_entry",
+                {
+                    "project": "agent-memory-project",
+                    "scope": "private",
+                    "theme": "hermod-server-build",
+                    "content": "# Hermod Server Build\n\nWhat the build left behind.\n",
+                    "description": "the hermod-server build",
+                    "tags": ["hermod-server"],
+                },
+            )
+        ).data
+        assert created["scope"] == "private"
+
+        listed = (
+            await client.call_tool("list_context_entries", {"project": "agent-memory-project"})
+        ).data
+        assert [(row["scope"], row["theme"]) for row in listed] == [
+            ("private", "hermod-server-build")
+        ]
+
+        read = (
+            await client.call_tool(
+                "read_context_entry",
+                {
+                    "project": "agent-memory-project",
+                    "scope": "private",
+                    "theme": "hermod-server-build",
+                },
+            )
+        ).data
+        assert read["found"] is True
+        assert read["scope"] == "private"
+        assert read["content"].startswith("# Hermod Server Build")
+
+        # The other scope is untouched: the entry is addressed, not searched for.
+        assert (
+            await client.call_tool(
+                "read_context_entry",
+                {
+                    "project": "agent-memory-project",
+                    "scope": "shared",
+                    "theme": "hermod-server-build",
+                },
+            )
+        ).data["found"] is False

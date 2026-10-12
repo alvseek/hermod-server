@@ -88,6 +88,29 @@ def test_every_op_a_served_prompt_references_resolves(loader: ContentLoader) -> 
         assert loader.unresolved_ops(name) == [], name
 
 
+def test_the_served_backend_is_the_store(loader: ContentLoader) -> None:
+    """Step 4.3: the composed ops are the store's tool calls, not markdown's file mechanics."""
+    assert "create_context_entry(project" in loader.get_prompt("update-project-context")
+
+
+def test_the_served_wrap_up_pushes_the_project_not_the_store(loader: ContentLoader) -> None:
+    """``db.md``'s § persist-store resolves to /push-project: the store is the server's own file,
+    written as every op runs, so the memory half of the persistence dissolves and only the
+    project's commits are left to push. `/push-all` is unserved, so the served text must not name
+    it as a command to run."""
+    served = loader.get_prompt("project-wrap-up")
+    assert "/push-project" in served
+    assert "/push-all" not in served
+
+
+def test_the_served_awaken_coder_delegates_the_episode_step(loader: ContentLoader) -> None:
+    """Episodes are Munnin's records and the store holds none, so § select-project-episode
+    resolves to a delegation rather than a store read."""
+    served = loader.get_prompt("awaken-coder")
+    assert "§ select-project-episode" in served
+    assert "memory layer" in served
+
+
 def test_a_resource_is_served_verbatim(loader: ContentLoader) -> None:
     served = loader.get_resource("project-context-template")
     on_disk = (CONTENT / "templates" / "project-context-template.md").read_text(encoding="utf-8")

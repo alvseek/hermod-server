@@ -14,7 +14,9 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from hermod.api_mcp.server import INSTRUCTIONS, build_mcp
+from hermod.business_services.context_service import ContextService
 from hermod.content.loader import ContentLoader, ContentSource
+from hermod.data_repositories.sqlite_project_repository import SqliteProjectRepository
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "agent-memory-project"
@@ -31,8 +33,10 @@ SERVED = [
 
 
 @pytest.fixture
-def mcp() -> FastMCP:
-    return build_mcp(ContentLoader([ContentSource(name="project", root=CONTENT)]))
+def mcp(tmp_path) -> FastMCP:
+    content = ContentLoader([ContentSource(name="project", root=CONTENT)])
+    service = ContextService(SqliteProjectRepository(tmp_path / "hermod.db"))
+    return build_mcp(content, service)
 
 
 async def test_a_client_lists_exactly_the_served_prompts(mcp: FastMCP) -> None:
@@ -105,3 +109,26 @@ async def test_a_prompt_argument_fills_the_placeholder(mcp: FastMCP) -> None:
     text = result.messages[0].content.text
     assert "$ARGUMENTS" not in text
     assert "create" in text
+
+
+STORE_TOOLS = {
+    "list_context_entries",
+    "read_context_entry",
+    "create_context_entry",
+    "update_context_entry",
+    "move_context_entry",
+    "delete_context_entry",
+    "check_entry_size",
+    "map_exists",
+    "read_map",
+    "create_map",
+    "write_map",
+}
+
+
+async def test_the_store_tools_share_the_face(mcp: FastMCP) -> None:
+    """Phase 4's ops are reachable through the same door as the content, which is what makes a
+    served db mechanic ("call § create-context-entry") resolvable by the agent reading it."""
+    async with Client(mcp) as client:
+        names = {tool.name for tool in await client.list_tools()}
+    assert STORE_TOOLS <= names

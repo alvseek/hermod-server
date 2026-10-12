@@ -21,7 +21,8 @@ def test_defaults_are_loopback_and_local() -> None:
     assert config.host == "127.0.0.1"
     assert config.port == 8210
     assert config.content_root == Path("agent-memory-project")
-    assert config.backend_doc == "storage-backends/markdown.md"
+    # The store's backend document, not markdown's: a served client has no local store.
+    assert config.backend_doc == "storage-backends/db.md"
     assert config.db_path == Path("data/hermod.db")
 
 
@@ -47,8 +48,8 @@ def test_no_issuer_or_auth_surface() -> None:
 def test_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("HERMOD_PORT", "9001")
     monkeypatch.setenv("HERMOD_CONTENT_ROOT", r"C:\Work\IM\somewhere-else")
-    monkeypatch.setenv("HERMOD_BACKEND_DOC", "storage-backends/db.md")
+    monkeypatch.setenv("HERMOD_BACKEND_DOC", "storage-backends/markdown.md")
     config = load_config()
     assert config.port == 9001
     assert config.content_root == Path(r"C:\Work\IM\somewhere-else")
-    assert config.backend_doc == "storage-backends/db.md"
+    assert config.backend_doc == "storage-backends/markdown.md"

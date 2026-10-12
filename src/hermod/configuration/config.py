@@ -11,8 +11,7 @@ Two settings deserve a word because they are the seams the plan put here rather 
 ``backend_doc``
     the storage backend a served prompt composes onto. The overlay ships two, and the served
     form has to pick one explicitly: a served client has no local store, so it composes onto
-    the store's ops rather than the markdown ones. It defaults to the markdown document while
-    the project store's mechanics are unwritten, and flips to ``db.md`` when they exist.
+    the store's ops rather than the markdown ones, which is why ``db.md`` is the default.
 
 ``content_root``
     the overlay checkout to serve, read live on every request. The default is the submodule
@@ -26,7 +25,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_BACKEND_DOC = "storage-backends/markdown.md"
+DEFAULT_BACKEND_DOC = "storage-backends/db.md"
 
 
 @dataclass(frozen=True)

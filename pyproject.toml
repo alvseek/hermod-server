@@ -1,0 +1,44 @@
+[project]
+name = "hermod"
+version = "0.1.0"
+description = "Hermod — the coding overlay's MCP server (serves the agent-memory-project overlay)."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Alviandi Widiasto", email = "alviandi@msn.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.4.6",
+    "starlette>=1.6",
+    "uvicorn>=0.52.1",
+]
+
+[project.scripts]
+hermod = "hermod.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]  # pycodestyle, pyflakes, isort
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# The repo root on sys.path, so tests can import the package without an install step.
+pythonpath = ["."]

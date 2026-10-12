@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Runtime data - NEVER commit the project store
+data/
+
+# Secrets / host-specific config
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db

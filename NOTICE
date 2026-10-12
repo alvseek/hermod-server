@@ -1,0 +1,12 @@
+hermod-server
+Copyright 2026 Alviandi Widiasto (alvseek)
+
+This product - the coding overlay's MCP server (Hermod), which serves the
+agent-memory-project overlay - is licensed under the Apache License, Version 2.0.
+See the LICENSE file at the root of this repository, or
+http://www.apache.org/licenses/LICENSE-2.0
+
+Hermod is the served form of the coding overlay, and a peer of Munnin, the memory
+server (agent-memory-server). The overlay it serves (agent-memory-project) and the
+memory core beneath both (agent-memory-system) are separate repositories, licensed
+the same way, so a coding agent's halves are under one set of terms.

@@ -76,9 +76,10 @@ def build_mcp(
 ) -> FastMCP:
     """The MCP face: the overlay's content, and the project store behind it.
 
-    ``auth=None`` leaves the face open, which is the laptop shape and only ever reached through
-    ``HERMOD_AUTH=off`` under a loopback bind. Passing a provider hands it to the transport, so the
-    guard covers the whole face — prompts, resources and tools — with no per-handler wiring.
+    ``auth=None`` leaves the face open, which is the laptop shape: it is reached exactly when no
+    issuer is configured, and then only under a loopback bind. Passing a provider hands it to the
+    transport, so the guard covers the whole face — prompts, resources and tools — with no
+    per-handler wiring.
     """
     mcp: FastMCP = FastMCP("hermod", instructions=INSTRUCTIONS, auth=auth)
 

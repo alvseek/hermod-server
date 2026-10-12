@@ -261,8 +261,8 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
 
     ``auth`` exists so tests can present a chosen token through a doubled verifier. It replaces
     *which* issuer is trusted and never whether verification happens — no value of this parameter
-    switches auth off. The one way to run without verification is ``HERMOD_AUTH=off``, which
-    ``build_auth`` grants only for a loopback public URL and bind.
+    switches auth off. The one way to run without verification is to configure no issuer at all,
+    which ``build_auth`` grants only for a loopback public URL and bind.
     """
     config = config or load_config()
     auth = auth if auth is not None else build_auth(config)

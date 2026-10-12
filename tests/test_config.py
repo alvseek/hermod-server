@@ -1,7 +1,8 @@
-"""The config is local-only by construction.
+"""The config: local by default, verified when an issuer is configured.
 
-This is the scaffold's test: the package imports, the defaults are what a local server needs,
-and the auth surface Munnin carries is genuinely absent rather than merely unused.
+The scaffold's test grew teeth with the hosting change. Its job is still the same — assert the
+defaults a local server needs — plus the new property that matters: verification is decided by the
+issuer's presence, so there is no mode switch to be set wrong.
 """
 
 from __future__ import annotations
@@ -26,30 +27,46 @@ def test_defaults_are_loopback_and_local() -> None:
     assert config.db_path == Path("data/hermod.db")
 
 
-def test_no_issuer_or_auth_surface() -> None:
-    """Decision 5: local mode only, so there is no auth field to misconfigure.
+def test_no_issuer_by_default_and_no_mode_switch() -> None:
+    """The default run is local, and verification follows the issuer rather than a toggle.
 
-    Munnin's config carries an issuer, an audience, a public base URL and a mode switch; a
-    field that exists is a field that can be set wrong, so their absence is the guarantee.
+    Munnin carries ``MUNNIN_AUTH`` because its laptop shape has a meaning the hosted shape does not
+    (one constant tenant). Hermod has no tenant, so the switch would buy nothing and cost a state
+    that can be set wrong; its absence is the guarantee that tokens are checked exactly when there
+    is something to check them against.
     """
-    fields = set(Config.__dataclass_fields__)
-    forbidden = {
-        "auth_mode",
-        "public_base_url",
-        "local_bind_all",
-        "logto_endpoint",
-        "logto_audience",
-        "authkit_domain",
-        "user_id",
-    }
-    assert not fields & forbidden, f"auth surface crept in: {sorted(fields & forbidden)}"
+    config = Config()
+    assert config.logto_endpoint == ""
+    assert config.logto_audience == ()
+    assert config.public_base_url == "http://127.0.0.1:8210"
+    assert config.local_bind_all is False
+    assert "auth_mode" not in Config.__dataclass_fields__
 
 
 def test_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("HERMOD_PORT", "9001")
     monkeypatch.setenv("HERMOD_CONTENT_ROOT", r"C:\Work\IM\somewhere-else")
     monkeypatch.setenv("HERMOD_BACKEND_DOC", "storage-backends/markdown.md")
+    monkeypatch.setenv("HERMOD_LOGTO_ENDPOINT", "https://auth.lok.quest")
+    monkeypatch.setenv("HERMOD_PUBLIC_BASE_URL", "https://hermod.lok.quest")
+    monkeypatch.setenv(
+        "HERMOD_LOGTO_AUDIENCE",
+        "https://hermod.lok.quest/mcp, https://hermod.lok.quest/mcp/ ,",
+    )
     config = load_config()
     assert config.port == 9001
     assert config.content_root == Path(r"C:\Work\IM\somewhere-else")
     assert config.backend_doc == "storage-backends/markdown.md"
+    assert config.logto_endpoint == "https://auth.lok.quest"
+    assert config.public_base_url == "https://hermod.lok.quest"
+    # Comma-separated, trimmed, and empty entries dropped: the deploy writes a trailing comma.
+    assert config.logto_audience == (
+        "https://hermod.lok.quest/mcp",
+        "https://hermod.lok.quest/mcp/",
+    )
+
+
+def test_local_bind_all_is_opt_in(monkeypatch) -> None:
+    assert load_config().local_bind_all is False
+    monkeypatch.setenv("HERMOD_LOCAL_BIND_ALL", "1")
+    assert load_config().local_bind_all is True

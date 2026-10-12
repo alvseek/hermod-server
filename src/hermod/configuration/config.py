@@ -1,10 +1,16 @@
 """Hermod configuration.
 
-**Local only, and that is structural rather than configured.** Hermod serves a repository that
-lives on this machine, so there is nothing to reach from elsewhere and nothing to authenticate:
-this file carries no issuer, no audience, no base URL and no mode switch, and the ASGI app
-carries no auth middleware. Hosting Hermod would mean porting Munnin's `build_auth` and its
-loopback guards, not flipping a flag here.
+**Local by default, verified when hosted.** Hermod reads a repository on the machine it runs on,
+so its shipped shape binds loopback and asks nobody to log in. That default is safe but it is not
+sufficient the moment the server is reachable beyond this machine: the MCP face exposes the project
+store **read and write**, so a server anyone can reach would be one anyone can rewrite.
+
+``logto_endpoint``, ``logto_audience`` and ``public_base_url`` configure the token verification that
+stands in front of it when it is hosted. None of them is a secret: a resource server verifies
+against a **public** JWKS and holds no client credential, which is why these sit in plain config
+rather than behind the deploy's secret handling. The shape is Munnin's, ported, minus its tenancy —
+Hermod's store is project-keyed rather than caller-keyed, so a verified token is a gate here and
+never a tenant.
 
 Two settings deserve a word because they are the seams the plan put here rather than in code:
 
@@ -43,6 +49,43 @@ class Config:
     # Hermod's own store: project-keyed memory (context entries, the orientation map).
     # Gitignored runtime data, one writer.
     db_path: Path = Path("data/hermod.db")
+    # Logto tenant endpoint, e.g. "https://auth.lok.quest" (Console -> Settings -> Domains). When
+    # set, Logto mints the tokens the MCP face verifies. The OIDC paths beneath it are fixed by
+    # Logto, so they are derived rather than configured.
+    logto_endpoint: str = ""
+    # Overrides the audience tokens are checked against. Normally left empty, because the audience
+    # binds itself to the resource URL this server advertises. Set it when the registered API
+    # Identifier differs from that URL, or when more than one is in play: a token request's
+    # ``resource`` parameter has to match a registered identifier character for character, and a
+    # client that authorizes against one identifier while refreshing against another mints tokens
+    # under both. Comma-separated, so a rename never needs a window in which neither is accepted.
+    logto_audience: tuple[str, ...] = ()
+    # Whether the MCP face carries a verified token is decided by whether an issuer is configured,
+    # and by nothing else — there is no mode switch here, deliberately. Munnin's switch works
+    # because its default is ``token``; a switch on this server would be a field that can be set
+    # wrong, and its two plausible defaults fail differently (one refuses the documented local run,
+    # the other can silently leave a configured issuer unused). With the issuer itself as the switch
+    # there is no third state to get wrong: tokens are verified exactly when there is something to
+    # verify against, and the loopback guards below refuse to run open on a server anything else can
+    # reach.
+    #
+    # Overrides the audience tokens are checked against. Normally left empty, because the audience
+    # binds itself to the resource URL this server advertises. Set it when the registered API
+    # Identifier differs from that URL, or when more than one is in play: a token request's
+    # ``resource`` parameter has to match a registered identifier character for character, and a
+    # client that authorizes against one identifier while refreshing against another mints tokens
+    # under both. Comma-separated, so a rename never needs a window in which neither is accepted.
+    logto_audience: tuple[str, ...] = ()
+    # Local mode's second guard, reached only when no issuer is configured. A process bound to
+    # ``0.0.0.0`` with no authentication is open to every network the machine is on — unless the
+    # operator states, with this flag, that something in front of it (a container port published on
+    # the host's loopback) keeps it local. The flag is an acknowledgement, never a detection: the
+    # server cannot know what publishes its port, so it asks to be told.
+    local_bind_all: bool = False
+    # This server's own public URL. Tokens are bound to it as their audience, so it must match the
+    # Resource Indicator registered with the issuer. Loopback by default — the only value local
+    # mode accepts, and the right one for a laptop; a deployment sets its own.
+    public_base_url: str = "http://127.0.0.1:8210"
 
 
 def load_config() -> Config:
@@ -53,4 +96,12 @@ def load_config() -> Config:
         content_root=Path(os.getenv("HERMOD_CONTENT_ROOT", "agent-memory-project")),
         backend_doc=os.getenv("HERMOD_BACKEND_DOC", DEFAULT_BACKEND_DOC),
         db_path=Path(os.getenv("HERMOD_DB_PATH", "data/hermod.db")),
+        logto_endpoint=os.getenv("HERMOD_LOGTO_ENDPOINT", ""),
+        logto_audience=tuple(
+            entry.strip()
+            for entry in os.getenv("HERMOD_LOGTO_AUDIENCE", "").split(",")
+            if entry.strip()
+        ),
+        local_bind_all=os.getenv("HERMOD_LOCAL_BIND_ALL", "").lower() in {"1", "true", "yes"},
+        public_base_url=os.getenv("HERMOD_PUBLIC_BASE_URL", "http://127.0.0.1:8210"),
     )

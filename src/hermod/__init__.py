@@ -4,8 +4,10 @@ Serves the `agent-memory-project` overlay (the coding shell, project memory and 
 over MCP, so a client that cannot install markdown can still use it. The memory half of the
 framework is Munnin's; a coding client connects both.
 
-Local only: there is no issuer, no token path and no secret, because Hermod reads the
-repository it serves and therefore runs on the machine that holds it.
+Local by default: with no issuer configured the server binds loopback and asks nobody to log in,
+because it reads the repository it serves and therefore runs on the machine that holds it. Hosted,
+it verifies Logto tokens in front of the MCP face, because that face exposes the project store
+read and write and a server anyone can reach must not be one anyone can rewrite.
 """
 
 from __future__ import annotations

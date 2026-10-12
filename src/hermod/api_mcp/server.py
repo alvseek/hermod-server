@@ -9,9 +9,9 @@ is what that instruction resolves to here.
 
 **The data tools are the store's ops.** The project store arrived in Phase 4, so this face also
 registers one tool per ``db.md`` op — the context entries and the orientation map a served
-procedure reads and writes. There is still no auth, and it is still structural: the server binds
-loopback and owns only the project memory the overlay's ``db`` backend has been declaring since
-ADR-023.
+procedure reads and writes. Those tools write, which is why an issuer-configured server carries a
+token in front of this face: the guard is applied by the transport (``auth`` reaches ``FastMCP``),
+so it covers every tool and every prompt at once rather than each one opting in.
 
 A stranger who connects meets this surface cold, so the server says what it is: ``INSTRUCTIONS``
 goes out in the ``initialize`` result (clients inject it into the system prompt), ``help`` returns
@@ -26,6 +26,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.auth import AuthProvider
 
 from hermod.business_services.context_service import ContextService
 from hermod.content.loader import ContentLoader
@@ -70,9 +71,16 @@ def _procedure_rows(content: ContentLoader) -> list[dict[str, str]]:
     ]
 
 
-def build_mcp(content: ContentLoader, service: ContextService) -> FastMCP:
-    """The MCP face: the overlay's content, and the project store behind it."""
-    mcp: FastMCP = FastMCP("hermod", instructions=INSTRUCTIONS)
+def build_mcp(
+    content: ContentLoader, service: ContextService, auth: AuthProvider | None = None
+) -> FastMCP:
+    """The MCP face: the overlay's content, and the project store behind it.
+
+    ``auth=None`` leaves the face open, which is the laptop shape and only ever reached through
+    ``HERMOD_AUTH=off`` under a loopback bind. Passing a provider hands it to the transport, so the
+    guard covers the whole face — prompts, resources and tools — with no per-handler wiring.
+    """
+    mcp: FastMCP = FastMCP("hermod", instructions=INSTRUCTIONS, auth=auth)
 
     @mcp.tool(title="Liveness check", annotations=_READ)
     def ping() -> str:

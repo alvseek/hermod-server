@@ -1,0 +1,65 @@
+name: Build image
+
+# Only main and version tags publish. Feature branches still run CI, but
+# publishing from them would fill the registry with tags nothing deploys.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # agent-memory-project is COPYed into the image, so a checkout without submodules
+      # fails the build outright.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # Needed for the Dockerfile's BuildKit cache mounts and the gha cache below.
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/alvseek/hermod
+          # Kamal refuses to boot an image without this label — it is how it
+          # recognises its own containers. Kamal adds it when it builds; here
+          # CI builds instead, so the label has to be applied at this step.
+          labels: |
+            service=hermod
+          # The short commit SHA is the tag deploys and rollbacks name. It is
+          # immutable, which is the only reason rollback exists at all: a tag
+          # that is rebuilt in place destroys the image it replaces. `latest`
+          # moves, so it is for ad-hoc runs and must never reach a deploy config.
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # amd64 only — the target is one x86_64 VPS, so a multi-arch build would
+      # double the time for an image nothing pulls.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

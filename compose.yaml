@@ -1,0 +1,53 @@
+# The LOCAL shape: one container, no issuer, reachable from this machine only.
+# The hosted shape does not use this file — it runs the same image with an issuer configured,
+# behind a TLS proxy, deployed by whatever runs it (hermod-deploy).
+name: hermod
+
+services:
+  hermod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hermod:0.1.0
+    # Published on the host's loopback only. The unguarded shape is safe precisely because
+    # nothing beyond this machine can reach the port, and HERMOD_LOCAL_BIND_ALL below is the
+    # statement of this line. The HOST port is a choice (a host-native Hermod may already hold
+    # 8210); the container port is fixed.
+    ports:
+      - "127.0.0.1:${HERMOD_HOST_PORT:-8210}:8210"
+    environment:
+      # 0.0.0.0 inside the container: the app's own default binds the container's loopback,
+      # which nothing outside it can reach.
+      HERMOD_HOST: "0.0.0.0"
+      HERMOD_PORT: "8210"
+      HERMOD_DB_PATH: /app/data/hermod.db
+      HERMOD_CONTENT_ROOT: /app/agent-memory-project
+      # No issuer here — this is the laptop shape — so the app applies its loopback guards.
+      # To run this image behind a public hostname instead, set HERMOD_LOGTO_ENDPOINT and
+      # HERMOD_PUBLIC_BASE_URL and drop HERMOD_LOCAL_BIND_ALL.
+      #
+      # The container binds 0.0.0.0 (it must, to be reachable from the host at all), which the
+      # guard refuses unless told that something else keeps it local. The `ports:` line above is
+      # that something, and this flag is the acknowledgement of it — never a detection. Do not
+      # set it on a process that binds 0.0.0.0 without such a front.
+      HERMOD_LOCAL_BIND_ALL: "1"
+    volumes:
+      # The DIRECTORY, never the file. SQLite runs in WAL mode here, so it keeps
+      # -wal and -shm sidecars beside the store; mounting only the .db would
+      # strand them in the container and destroy them on recreation.
+      - type: volume
+        source: hermod-data
+        target: /app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  hermod-data:
+    # Named, never anonymous — an anonymous volume dies with the container.
+    # Local only: POSIX advisory locking is unreliable over NFS/CIFS, which
+    # makes a network driver under a file database a corruption path.
+    driver: local

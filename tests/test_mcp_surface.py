@@ -14,6 +14,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from hermod.api_mcp.server import INSTRUCTIONS, build_mcp
+from hermod.business_services.awakening_service import AwakeningService
 from hermod.business_services.context_service import ContextService
 from hermod.content.loader import ContentLoader, ContentSource
 from hermod.data_repositories.record_project_repository import RecordProjectRepository
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "agent-memory-project"
 
 SERVED = [
+    "add-coding-reasoning",
     "awaken-coder",
     "load-project-context",
     "map-orientation",
@@ -41,7 +43,10 @@ def mcp(tmp_path) -> FastMCP:
         lambda: RecordProjectRepository(user_id="unused", db_url="postgresql://unused"),
         {name: content.template_version(name) for name in content.list_resources()},
     )
-    return build_mcp(content, service)
+    awakening = AwakeningService(
+        lambda: RecordProjectRepository(user_id="unused", db_url="postgresql://unused")
+    )
+    return build_mcp(content, service, awakening)
 
 
 async def test_a_client_lists_exactly_the_served_prompts(mcp: FastMCP) -> None:
@@ -137,3 +142,17 @@ async def test_the_store_tools_share_the_face(mcp: FastMCP) -> None:
     async with Client(mcp) as client:
         names = {tool.name for tool in await client.list_tools()}
     assert STORE_TOOLS <= names
+
+
+async def test_the_awakening_tool_is_registered_and_refuses_an_empty_set(mcp: FastMCP) -> None:
+    """The face's one *assembled* payload, named here so it cannot be dropped silently.
+
+    Called with no projects it refuses before reading anything, which is what lets this test prove
+    the tool is reachable without a database behind it: the guard is the service's first line, so
+    nothing here reaches the store.
+    """
+    async with Client(mcp) as client:
+        names = {tool.name for tool in await client.list_tools()}
+        assert "awaken_coder" in names
+        with pytest.raises(Exception, match="at least one project"):
+            await client.call_tool("awaken_coder", {"domain": "meta", "projects": []})

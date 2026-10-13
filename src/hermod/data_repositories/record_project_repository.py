@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 import psycopg
 from psycopg.rows import dict_row
 
+from hermod.data_entities.awakening import CodingPattern, Episode, EpisodeIndexEntry
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 
 #: The type a project row carries. Munnin's records of this type that also carry a `project` are
@@ -49,6 +50,12 @@ RECORD_TYPE = "knowledge"
 #: The map's natural key inside `shared_record`. A project has one map, so the title is the key,
 #: and a second create is refused by the uuid it derives rather than by a constraint.
 MAP_TITLE = "orientation-map"
+#: Munnin's episodic record type. Hermod reads it for the coding awakening's carry-forward and
+#: never writes or retires it (ADR-029).
+EPISODE_TYPE = "episode"
+#: The coding lane's record type — the overlay's own lane, shared and project-less, which is what
+#: keeps coding patterns out of a chat agent's awakening.
+CODING_REASONING_TYPE = "coding_reasoning"
 
 #: The namespace a project row's uuid is derived in, so the same entry always lands on the same
 #: row: a re-import upserts rather than duplicating, and a lookup needs no scan.
@@ -418,6 +425,76 @@ class RecordProjectRepository:
             row = cur.fetchone()
         return _row_to_map(row)
 
+    # --- the memory rows the coding awakening reads --------------------------------
+
+    def newest_episode_per_project(
+        self, *, agent: str, projects: Sequence[str]
+    ) -> Sequence[Episode]:
+        """One newest live episode per project in ``projects``, in the set's own order.
+
+        One query rather than one per project: ``DISTINCT ON (project)`` picks each project's
+        newest row and the outer sort restores the caller's order. A project with no live
+        episode is absent rather than empty, so a caller can tell "no episode" from "an
+        episode with no body".
+
+        **Both lifecycle columns are filtered here, and ``_select`` filters only one of
+        them.** ``_select``'s note that "nothing archives today" is a fact about context rows;
+        Munnin archives *episodes*, so an archived one is retired context and must not be
+        carried forward. These are therefore the same filters Munnin's own episode read
+        applies, and that parity is what keeps a deleted or archived episode out of an
+        awakening.
+        """
+        if not projects:
+            return []
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT ON (project) * FROM memory_record "
+                "WHERE user_id = %s AND agent_id = %s AND record_type = %s "
+                "AND project = ANY(%s) AND deleted_date IS NULL AND archived_date IS NULL "
+                "ORDER BY project, created_date DESC, id DESC",
+                (self._user_id, agent, EPISODE_TYPE, list(projects)),
+            )
+            rows = cur.fetchall()
+        newest = {row["project"]: _row_to_episode(row) for row in rows}
+        return [newest[project] for project in projects if project in newest]
+
+    def coding_lane(self) -> Sequence[CodingPattern]:
+        """The whole lane, in title order.
+
+        Shared memory, so it is read under the tenant and never under an agent: the lane has
+        no owner, and asking for one would be a scoping mistake rather than a safety measure.
+        """
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM shared_record WHERE user_id = %s AND record_type = %s "
+                "AND deleted_date IS NULL AND archived_date IS NULL ORDER BY title",
+                (self._user_id, CODING_REASONING_TYPE),
+            )
+            rows = cur.fetchall()
+        return [_row_to_pattern(row) for row in rows]
+
+    def episode_index(
+        self, *, agent: str, projects: Sequence[str]
+    ) -> Sequence[EpisodeIndexEntry]:
+        """Every live episode of the set, newest first, without bodies.
+
+        The columns are named because that *is* the read: a body a caller will not use is
+        weight this index exists to avoid carrying. Same lifecycle filters as the newest-body
+        read next to it, for the same reason.
+        """
+        if not projects:
+            return []
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT uuid, title, project, tags, created_date, modified_date "
+                "FROM memory_record WHERE user_id = %s AND agent_id = %s AND record_type = %s "
+                "AND project = ANY(%s) AND deleted_date IS NULL AND archived_date IS NULL "
+                "ORDER BY created_date DESC, id DESC",
+                (self._user_id, agent, EPISODE_TYPE, list(projects)),
+            )
+            rows = cur.fetchall()
+        return [_row_to_index_entry(row) for row in rows]
+
     # --- the two selects everything reads through ---------------------------------
 
     def _select(
@@ -489,4 +566,39 @@ def _row_to_map(row: dict) -> OrientationMap:
         created_date=row["created_date"],
         modified_date=row["modified_date"],
         full_content=row["full_content"],
+    )
+
+
+def _row_to_episode(row: dict) -> Episode:
+    return Episode(
+        id=row["id"],
+        agent=row["agent_id"],
+        project=row["project"],
+        title=row["title"],
+        tags=json.loads(row["tags"]) if row["tags"] else [],
+        created_date=row["created_date"],
+        modified_date=row["modified_date"],
+        full_content=row["full_content"],
+    )
+
+
+def _row_to_pattern(row: dict) -> CodingPattern:
+    return CodingPattern(
+        id=row["id"],
+        title=row["title"],
+        tags=json.loads(row["tags"]) if row["tags"] else [],
+        created_date=row["created_date"],
+        modified_date=row["modified_date"],
+        full_content=row["full_content"],
+    )
+
+
+def _row_to_index_entry(row: dict) -> EpisodeIndexEntry:
+    return EpisodeIndexEntry(
+        uuid=row["uuid"],
+        title=row["title"],
+        project=row["project"],
+        tags=json.loads(row["tags"]) if row["tags"] else [],
+        created_date=row["created_date"],
+        modified_date=row["modified_date"],
     )

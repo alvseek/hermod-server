@@ -21,12 +21,15 @@ import pytest
 from fastmcp import Client
 
 from hermod.api_mcp.server import build_mcp
+from hermod.business_services.awakening_service import AwakeningService
 from hermod.business_services.context_service import MAX_ENTRY_LINES, ContextService
 from hermod.content.loader import ContentLoader, ContentSource
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 from hermod.data_repositories.record_project_repository import (
     _MEMORY_INSERT,
     _SHARED_INSERT,
+    CODING_REASONING_TYPE,
+    EPISODE_TYPE,
     MAP_TITLE,
     RECORD_TYPE,
     RecordProjectRepository,
@@ -333,7 +336,7 @@ def test_an_entry_over_the_line_cap_is_refused_rather_than_split(store) -> None:
 async def test_reads_need_no_overlay_checkout_and_writes_say_why_they_do(store) -> None:
     """A store's reads are the store's. Its writes need the template, which needs the checkout."""
     loader, service = _service(store, with_overlay=False)
-    mcp = build_mcp(loader, service)
+    mcp = build_mcp(loader, service, AwakeningService(lambda: store))
 
     async with Client(mcp) as client:
         assert await client.list_prompts() == []
@@ -354,11 +357,146 @@ async def test_reads_need_no_overlay_checkout_and_writes_say_why_they_do(store) 
             )
 
 
+# --- the memory rows the coding awakening reads ---------------------------------------
+#
+# Hermod reads Munnin's episodes and its coding lane and never writes either. Nothing here can
+# call Munnin, so the parity these tests assert is the *filter* parity: the same lifecycle rules
+# Munnin's own reads apply, exercised against rows that would come back if either filter went
+# missing.
+
+
+def _row(
+    store: RecordProjectRepository,
+    *,
+    table: str,
+    record_type: str,
+    title: str,
+    project: str | None = None,
+    agent: str = AGENT,
+    created: str = "2026-01-01T00:00:00+00:00",
+    archived: str | None = None,
+    deleted: str | None = None,
+) -> None:
+    """Seed one record the way Munnin would have written it.
+
+    The repository has no writer for these types by design (ADR-029), so a test writes the row
+    the store's own shape carries rather than asking Hermod to invent one.
+    """
+    columns = [
+        "uuid", "user_id", "record_type", "project", "title", "tags",
+        "created_date", "modified_date", "archived_date", "deleted_date",
+        "full_content", "content_summary",
+    ]
+    values: list[object] = [
+        f"uuid-{table}-{title}", USER, record_type, project, title, "[]",
+        created, created, archived, deleted, f"# {title}\n\nbody of {title}\n", None,
+    ]
+    if table == "memory_record":
+        columns.insert(2, "agent_id")
+        values.insert(2, agent)
+    with store._conn() as conn, conn.cursor() as cur:  # noqa: SLF001 — the fixture is the seam
+        cur.execute(
+            f"INSERT INTO {table} ({', '.join(columns)}) "
+            f"VALUES ({', '.join(['%s'] * len(columns))})",
+            values,
+        )
+
+
+def test_the_newest_live_episode_is_read_per_project(store) -> None:
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="older", project="one",
+         created="2026-01-01T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="newer", project="one",
+         created="2026-01-02T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="other", project="two",
+         created="2026-01-01T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="outside", project="three",
+         created="2026-01-09T00:00:00+00:00")
+
+    found = store.newest_episode_per_project(agent=AGENT, projects=["one", "two", "four"])
+
+    assert [e.title for e in found] == ["newer", "other"]
+    assert [e.project for e in found] == ["one", "two"]
+    assert found[0].full_content.startswith("# newer")
+
+
+def test_an_archived_or_tombstoned_episode_is_not_carried_forward(store) -> None:
+    """The filter parity, asserted where it can fail.
+
+    Both retired rows are *newer* than the live one, so a missing predicate does not return a
+    wrong order, it returns the wrong episode. Deleting either filter from the query turns this
+    test red, which is the only thing that keeps two servers agreeing about what "live" means.
+    """
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="live", project=PROJECT,
+         created="2026-01-01T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="archived", project=PROJECT,
+         created="2026-01-02T00:00:00+00:00", archived="2026-01-03T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="deleted", project=PROJECT,
+         created="2026-01-04T00:00:00+00:00", deleted="2026-01-05T00:00:00+00:00")
+
+    found = store.newest_episode_per_project(agent=AGENT, projects=[PROJECT])
+
+    assert [e.title for e in found] == ["live"]
+
+
+def test_an_episode_of_another_agent_is_not_read(store) -> None:
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="mine", project=PROJECT,
+         agent=AGENT)
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="theirs", project=PROJECT,
+         agent=OTHER_AGENT, created="2026-02-01T00:00:00+00:00")
+
+    found = store.newest_episode_per_project(agent=AGENT, projects=[PROJECT])
+
+    assert [e.title for e in found] == ["mine"]
+
+
+def test_no_projects_asks_nothing_and_gets_nothing(store) -> None:
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="live", project=PROJECT)
+    assert store.newest_episode_per_project(agent=AGENT, projects=[]) == []
+
+
+def test_the_episode_index_spans_the_set_and_carries_no_bodies(store) -> None:
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="one older", project="one",
+         created="2026-01-01T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="one newer", project="one",
+         created="2026-01-02T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="two", project="two",
+         created="2026-01-03T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="outside", project="three",
+         created="2026-01-04T00:00:00+00:00")
+    _row(store, table="memory_record", record_type=EPISODE_TYPE, title="retired", project="one",
+         created="2026-01-05T00:00:00+00:00", archived="2026-01-06T00:00:00+00:00")
+
+    index = store.episode_index(agent=AGENT, projects=["one", "two"])
+
+    assert [e.title for e in index] == ["two", "one newer", "one older"]
+    assert [e.project for e in index] == ["two", "one", "one"]
+    # the projection is the point: a body is what this read exists to avoid carrying
+    assert not hasattr(index[0], "full_content")
+    assert store.episode_index(agent=AGENT, projects=[]) == []
+
+
+def test_the_coding_lane_is_read_whole_and_retired_rows_are_not(store) -> None:
+    _row(store, table="shared_record", record_type=CODING_REASONING_TYPE, title="B pattern")
+    _row(store, table="shared_record", record_type=CODING_REASONING_TYPE, title="A pattern")
+    _row(store, table="shared_record", record_type=CODING_REASONING_TYPE, title="archived",
+         archived="2026-01-02T00:00:00+00:00")
+    _row(store, table="shared_record", record_type=CODING_REASONING_TYPE, title="deleted",
+         deleted="2026-01-02T00:00:00+00:00")
+    # Neither a project-context entry nor the map is the lane.
+    _row(store, table="shared_record", record_type=RECORD_TYPE, title="entry", project=PROJECT)
+
+    lane = store.coding_lane()
+
+    assert [p.title for p in lane] == ["A pattern", "B pattern"]
+    assert lane[0].full_content.startswith("# A pattern")
+
+
 # --- the schema copy, pinned to the code rather than trusted -------------------------
 
 #: Columns the code names outside its insert lists: in a `WHERE`, a `SET`, or when mapping a row.
-#: `archived_date` is deliberately absent, because nothing here reads or writes it — Hermod has no
-#: archive op, and its reads treat the tombstone as the only lifecycle.
+#: `archived_date` is named because the coding awakening's episode read filters it: Munnin archives
+#: episodes, so an archived one is retired context. The context reads still ignore it — Hermod has
+#: no archive op for its own rows, and nothing archives a context entry.
 _READ_BY_NAME = (
     "id",
     "user_id",
@@ -368,6 +506,7 @@ _READ_BY_NAME = (
     "tags",
     "created_date",
     "modified_date",
+    "archived_date",
     "deleted_date",
     "full_content",
     "content_summary",

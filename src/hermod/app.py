@@ -34,6 +34,7 @@ from starlette.routing import Mount, Route
 
 from hermod import __version__
 from hermod.api_mcp.server import build_mcp
+from hermod.business_services.awakening_service import AwakeningService
 from hermod.business_services.context_service import ContextService
 from hermod.business_services.tenant_resolver import TenantResolver
 from hermod.configuration.config import Config, load_config
@@ -307,13 +308,21 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
     # The tenant is a property of the call, so the repository is built inside it, where the
     # verified token exists and nowhere earlier.
     resolver = TenantResolver(db_url=config.db_url)
+
+    def repository_for() -> ProjectRepository:
+        """The store for the call in progress: the tenant exists only inside it."""
+        return build_project_repository(config, user_id=resolver.current_user_id())
+
     service = ContextService(
-        lambda: build_project_repository(config, user_id=resolver.current_user_id()),
+        repository_for,
         # The stamps come from the served templates themselves, so the gate can never drift from
         # what a client was told to read.
         {name: content.template_version(name) for name in content.list_resources()},
     )
-    mcp_app = build_mcp(content, service, auth=auth).http_app(path="/")
+    # One factory, two services: the store's ops and the awakening both resolve the tenant per
+    # call, for the same reason.
+    awakening = AwakeningService(repository_for)
+    mcp_app = build_mcp(content, service, awakening, auth=auth).http_app(path="/")
 
     app = Starlette(
         routes=[

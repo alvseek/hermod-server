@@ -28,6 +28,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
 
+from hermod.business_services.awakening_service import AwakeningService
 from hermod.business_services.context_service import ContextService
 from hermod.content.loader import ContentLoader
 from hermod.data_entities.project_context import ContextEntry, ContextScope
@@ -72,7 +73,10 @@ def _procedure_rows(content: ContentLoader) -> list[dict[str, str]]:
 
 
 def build_mcp(
-    content: ContentLoader, service: ContextService, auth: AuthProvider | None = None
+    content: ContentLoader,
+    service: ContextService,
+    awakening: AwakeningService,
+    auth: AuthProvider | None = None,
 ) -> FastMCP:
     """The MCP face: the overlay's content, and the project store behind it.
 
@@ -99,7 +103,37 @@ def build_mcp(
 
     _register_content(mcp, content)
     _register_store(mcp, service)
+    _register_awakening(mcp, awakening)
     return mcp
+
+
+def _register_awakening(mcp: FastMCP, awakening: AwakeningService) -> None:
+    """The coding awakening's one call (ADR-029).
+
+    Registered beside the store tools rather than inside ``_register_store``, because it is not
+    one: every tool there reads or writes a single record, and this one assembles a payload for
+    one procedure. The docstring says so where a reader meets the exception.
+    """
+
+    @mcp.tool(
+        name="awaken_coder",
+        title="Assemble the coding half of an awakening",
+        annotations=_READ,
+    )
+    def awaken_coder(domain: str, projects: list[str]) -> dict[str, Any]:
+        """One call for a coding awakening: the coding lane, the project set's episode index and
+        its newest episode per project, that set's project context index, and its orientation maps.
+
+        The only tool on this face that assembles a payload rather than reading one record. The
+        overlay's ``/awaken-coder`` procedure is its one caller, and it issues this call together
+        with Munnin's ``awaken``; together the two are the whole awakening.
+
+        ``projects`` is the session's own repository **first**, then the repositories related to
+        it: the context index and the maps come from the first, while the episodes span them all,
+        because the related set widens the recall rather than moving the session. A reordered list
+        answers about a different repository.
+        """
+        return awakening.awaken(domain=domain, projects=projects)
 
 
 def _register_content(mcp: FastMCP, content: ContentLoader) -> None:

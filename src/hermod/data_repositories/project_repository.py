@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
+from hermod.data_entities.awakening import CodingPattern, Episode, EpisodeIndexEntry
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 
 
@@ -117,4 +118,40 @@ class ProjectRepository(Protocol):
     def write_map(self, orientation_map: OrientationMap) -> OrientationMap:
         """Rewrite the project's map wholesale. Bumps ``modified_date``; raises
         ``LookupError`` if there is no map to write."""
+        ...
+
+    # --- the memory rows the coding awakening reads ---
+    #
+    # Munnin owns both of these. Hermod reads them for exactly one purpose, assembling the
+    # coding half of an awakening, and never writes, retires or repairs them (ADR-029).
+
+    def newest_episode_per_project(
+        self, *, agent: str, projects: Sequence[str]
+    ) -> Sequence[Episode]:
+        """The newest live episode for each of ``projects``, in the set's own order.
+
+        One per project, and a project with no live episode is simply absent from the
+        result. Archived and tombstoned rows are excluded, the same thing Munnin's own reads
+        do, because a retired episode is not context to carry forward. Episodes are
+        agent-scoped, so ``agent`` is required rather than optional."""
+        ...
+
+    def coding_lane(self) -> Sequence[CodingPattern]:
+        """The whole coding-reasoning lane, in title order.
+
+        Shared memory with no project and no owner, which is what keeps coding patterns out
+        of every other agent's awakening. No agent and no scope apply, so neither is taken
+        here."""
+        ...
+
+    def episode_index(
+        self, *, agent: str, projects: Sequence[str]
+    ) -> Sequence[EpisodeIndexEntry]:
+        """Every live episode of the set, newest first, **without bodies**.
+
+        The index half of the awakening's episodic part: the newest body per project is what
+        carries work forward, and the rest of the set is what tells a caller what else is
+        there. Named columns rather than ``*``, because the point of this read is that it does
+        not drag bodies a caller will not use. Episodes are agent-scoped, so ``agent`` is
+        required."""
         ...

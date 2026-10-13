@@ -275,7 +275,9 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         return payload
 
     @mcp.tool(title="List project context entries", annotations=_READ)
-    def list_context_entries(project: str, scope: str | None = None) -> list[dict[str, Any]]:
+    def list_context_entries(
+        project: str, scope: str | None = None, agent: str | None = None
+    ) -> list[dict[str, Any]]:
         """List a project's context entries — the project's context index.
 
         `scope` narrows to 'shared' or 'private'; omit it for both. An entry is addressed by
@@ -283,17 +285,23 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         """
         return [
             _entry(entry, with_content=False)
-            for entry in service.list_context_entries(project=project, scope=_scope_arg(scope))
+            for entry in service.list_context_entries(
+                project=project, scope=_scope_arg(scope), agent=agent
+            )
         ]
 
     @mcp.tool(title="Read a project context entry", annotations=_READ)
-    def read_context_entry(project: str, scope: str, theme: str) -> dict[str, Any]:
+    def read_context_entry(
+        project: str, scope: str, theme: str, agent: str | None = None
+    ) -> dict[str, Any]:
         """Read one context entry whole, by (project, scope, theme).
 
         Returns `found: False` when no live entry holds that identity — an answer to give, not an
         error to raise.
         """
-        entry = service.read_context_entry(project=project, scope=_scope_arg(scope), theme=theme)
+        entry = service.read_context_entry(
+            project=project, scope=_scope_arg(scope), theme=theme, agent=agent
+        )
         if entry is None:
             return {"found": False}
         return {"found": True, **_entry(entry, with_content=True)}
@@ -307,6 +315,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         template_version: str,
         description: str | None = None,
         tags: list[str] | None = None,
+        agent: str | None = None,
     ) -> dict[str, Any]:
         """Create one context entry from a filled-in project-context template.
 
@@ -324,6 +333,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             template_version=template_version,
             description=description,
             tags=tags,
+            agent=agent,
         )
         return _entry(entry, with_content=False)
 
@@ -336,6 +346,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         template_version: str,
         description: str | None = None,
         tags: list[str] | None = None,
+        agent: str | None = None,
     ) -> dict[str, Any]:
         """Replace a live context entry: its content, description and tags.
 
@@ -353,12 +364,13 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             template_version=template_version,
             description=description,
             tags=tags,
+            agent=agent,
         )
         return _entry(entry, with_content=False)
 
     @mcp.tool(title="Move a context entry between scopes", annotations=_WRITE)
     def move_context_entry(
-        project: str, theme: str, from_scope: str, to_scope: str
+        project: str, theme: str, from_scope: str, to_scope: str, agent: str | None = None
     ) -> dict[str, Any]:
         """Promote a private context entry to shared (or the reverse). The body is untouched.
 
@@ -370,14 +382,19 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             theme=theme,
             from_scope=_scope_arg(from_scope),
             to_scope=_scope_arg(to_scope),
+            agent=agent,
         )
         return _entry(entry, with_content=False)
 
     @mcp.tool(title="Delete a context entry", annotations=_WRITE)
-    def delete_context_entry(project: str, scope: str, theme: str) -> dict[str, Any]:
+    def delete_context_entry(
+        project: str, scope: str, theme: str, agent: str | None = None
+    ) -> dict[str, Any]:
         """Tombstone one context entry. It disappears from every read, and the same theme can be
         created again afterwards."""
-        service.delete_context_entry(project=project, scope=_scope_arg(scope), theme=theme)
+        service.delete_context_entry(
+            project=project, scope=_scope_arg(scope), theme=theme, agent=agent
+        )
         return {"deleted": True, "project": project, "scope": scope, "theme": theme}
 
     @mcp.tool(title="Check a context entry's size", annotations=_READ)

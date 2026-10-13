@@ -74,12 +74,18 @@ CREATE TABLE memory_record (
 """
 
 
-def make_store(url: str, *, user_id: str, agents: tuple[str, ...]) -> None:
-    """A fresh store: the record schema, one account, and the named agents.
+def make_store(
+    url: str,
+    *,
+    user_id: str,
+    agents: tuple[str, ...],
+    identity: tuple[str, str] | None = None,
+) -> None:
+    """A fresh store: the record schema, one account, the named agents, and an optional login.
 
-    The schema is dropped and recreated rather than migrated, because there is nothing to
-    migrate: the tables belong to the memory store's runner, and a test only needs them to exist
-    in the shape the code reads.
+    ``identity`` links one ``(iss, sub)`` pair to ``user_id``, which is what a caller without a
+    token needs in order to name a tenant: the importer resolves that pair rather than being told
+    an id, so a test of it has to seed the mapping a real login would have written.
     """
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
@@ -94,5 +100,11 @@ def make_store(url: str, *, user_id: str, agents: tuple[str, ...]) -> None:
                     "INSERT INTO agent (user_id, agent_id, created_date) "
                     "VALUES (%s, %s, '2026-01-01')",
                     (user_id, agent),
+                )
+            if identity is not None:
+                cur.execute(
+                    "INSERT INTO user_identity (iss, sub, user_id, linked_date) "
+                    "VALUES (%s, %s, %s, '2026-01-01')",
+                    (identity[0], identity[1], user_id),
                 )
         conn.commit()

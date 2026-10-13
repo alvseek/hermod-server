@@ -33,10 +33,11 @@ from starlette.routing import Mount, Route
 from hermod import __version__
 from hermod.api_mcp.server import build_mcp
 from hermod.business_services.context_service import ContextService
+from hermod.business_services.tenant_resolver import TenantResolver
 from hermod.configuration.config import Config, load_config
 from hermod.content.loader import ContentLoader, ContentSource
-from hermod.data_repositories.postgres_project_repository import PostgresProjectRepository
 from hermod.data_repositories.project_repository import ProjectRepository
+from hermod.data_repositories.record_project_repository import RecordProjectRepository
 
 #: Where the MCP face is mounted, and therefore the address a client connects to.
 MCP_MOUNT_PATH = "/mcp"
@@ -248,33 +249,32 @@ def build_auth(config: Config) -> AuthProvider | None:
     )
 
 
-class StoreBackendError(RuntimeError):
-    """Raised when the configured store backend is unknown or incomplete."""
+class StoreConfigError(RuntimeError):
+    """Raised when the store's configuration cannot name a database."""
 
 
-def validate_backend(config: Config) -> None:
-    """Refuse an unknown or incomplete backend rather than defaulting silently.
+def validate_store(config: Config) -> None:
+    """Refuse a store with no database rather than defaulting to anything.
 
-    A wrong value must fail loud: silently reading an unknown backend as SQLite would point a
-    deployment at a local file it never meant to use, and a missing DSN would leave a Postgres
-    deployment with no store at all. Mirrors Munnin's own check.
+    There is one engine and one place project memory lives (ADR-027), so the only failure here is a
+    missing DSN — and it must be loud, because the alternative is a server that boots and then
+    cannot read or write a single row.
     """
     if not config.db_url:
-        raise StoreBackendError(
+        raise StoreConfigError(
             "HERMOD_DB_URL is not set, so the store has no database. Hermod's project memory "
             "lives in Valaskjalf's records (ADR-027), and there is no second engine to fall back "
             "to: SQLite was removed with decision 9."
         )
 
 
-def build_project_repository(config: Config) -> ProjectRepository:
-    """The store for the configured backend (both satisfy the Protocol).
+def build_project_repository(config: Config, *, user_id: str) -> ProjectRepository:
+    """The store for one tenant, over Valaskjalf's records (ADR-027).
 
-    SQLite is the local and test path; Postgres is the deployed one, a second database on the
-    instance the memory store lives on. Nothing above this line knows which is in play, which is
-    the whole point of the seam.
+    A tenant is required rather than defaulted: every row in those tables carries one, and a value
+    invented here would write rows that no login would ever reach.
     """
-    return PostgresProjectRepository(config.db_url)
+    return RecordProjectRepository(user_id=user_id, db_url=config.db_url)
 
 
 async def health(request: Request) -> JSONResponse:
@@ -297,13 +297,16 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
     """
     config = config or load_config()
     auth = auth if auth is not None else build_auth(config)
-    validate_backend(config)
+    validate_store(config)
     content = ContentLoader(
         [ContentSource(name="overlay", root=config.content_root)],
         backend_doc=config.backend_doc,
     )
+    # The tenant is a property of the call, so the repository is built inside it, where the
+    # verified token exists and nowhere earlier.
+    resolver = TenantResolver(db_url=config.db_url)
     service = ContextService(
-        build_project_repository(config),
+        lambda: build_project_repository(config, user_id=resolver.current_user_id()),
         # The stamps come from the served templates themselves, so the gate can never drift from
         # what a client was told to read.
         {name: content.template_version(name) for name in content.list_resources()},

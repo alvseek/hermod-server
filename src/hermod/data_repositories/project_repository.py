@@ -1,8 +1,8 @@
 """The store seam (DI boundary) for Hermod's project memory.
 
-The server depends on this Protocol, never on a concrete database. v1 ships
-``SqliteProjectRepository``; a second backend swaps in by DI with no caller change, which is
-the same shape Munnin's ``MemoryRepository`` uses.
+The server depends on this Protocol, never on a concrete database. ``RecordProjectRepository`` is
+what implements it, over Valaskjalf's record tables, which is the same shape Munnin's
+``MemoryRepository`` uses.
 
 Two entity families, each addressed the way the markdown backend addresses a file:
 

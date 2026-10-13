@@ -6,6 +6,7 @@ are about the importer's rules and not about whatever the store happens to hold 
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,28 @@ from hermod.data_migrations.markdown_importer import (
     import_markdown,
     main,
 )
-from hermod.data_repositories.sqlite_project_repository import SqliteProjectRepository
+from hermod.data_repositories.record_project_repository import RecordProjectRepository
+from tests.valaskjalf_schema import make_store
+
+USER = "alvi"
+ISSUER = "https://auth.lok.quest/oidc"
+SUB = "import-operator"
+
+pytestmark = pytest.mark.postgres
+
+
+@pytest.fixture
+def store() -> RecordProjectRepository:
+    """A real store, with the tenant an import resolves and the two agents the tree names.
+
+    `meta` and `other` are seeded because the test tree has private homes under `agent-meta` and
+    `agent-other`, and a private write needs an agent row for its foreign key to point at.
+    """
+    url = os.getenv("HERMOD_PG_TEST_URL")
+    if not url:
+        pytest.skip("HERMOD_PG_TEST_URL not set")
+    make_store(url, user_id=USER, agents=("meta", "other"), identity=(ISSUER, SUB))
+    return RecordProjectRepository(user_id=USER, db_url=url)
 
 ENTRY = """---
 project: "proj-a"
@@ -117,8 +139,8 @@ def test_a_knowledge_base_directory_without_an_index_is_not_project_context(tmp_
 # --- importing -----------------------------------------------------------------------
 
 
-def test_import_writes_entries_and_the_map(tmp_path: Path) -> None:
-    repo = SqliteProjectRepository(tmp_path / "h.db")
+def test_import_writes_entries_and_the_map(tmp_path: Path, store) -> None:
+    repo = store
     report = import_markdown(repo, _memory_root(tmp_path))
 
     assert report.entries_created == 4
@@ -141,8 +163,8 @@ def test_import_writes_entries_and_the_map(tmp_path: Path) -> None:
     assert orientation_map.modified_date == "2026-02-02"
 
 
-def test_an_entry_with_no_frontmatter_still_imports(tmp_path: Path) -> None:
-    repo = SqliteProjectRepository(tmp_path / "h.db")
+def test_an_entry_with_no_frontmatter_still_imports(tmp_path: Path, store) -> None:
+    repo = store
     import_markdown(repo, _memory_root(tmp_path))
 
     entry = repo.get_context_entry(project="proj-b", scope=ContextScope.shared, theme="gamma")
@@ -152,8 +174,8 @@ def test_an_entry_with_no_frontmatter_still_imports(tmp_path: Path) -> None:
     assert entry.full_content.startswith("# Gamma")
 
 
-def test_a_second_run_is_a_no_op(tmp_path: Path) -> None:
-    repo = SqliteProjectRepository(tmp_path / "h.db")
+def test_a_second_run_is_a_no_op(tmp_path: Path, store) -> None:
+    repo = store
     root = _memory_root(tmp_path)
     import_markdown(repo, root)
 
@@ -163,14 +185,13 @@ def test_a_second_run_is_a_no_op(tmp_path: Path) -> None:
     assert again.maps_skipped == 1
 
 
-def test_two_agents_writing_one_private_theme_collide_and_are_reported(tmp_path: Path) -> None:
-    """The store's identity has no agent in it, and the markdown layout does.
+def test_two_agents_writing_one_private_theme_are_two_rows(tmp_path: Path, store) -> None:
+    """What the move was for: the agent is part of the identity, so nothing collides.
 
-    `agent-[domain]/knowledge-base/[project]/` means two agents can each hold a private entry
-    for one project under the same theme. One row is all the store has, so the second file
-    cannot be written; the importer names the pair instead of counting the file as already
-    present, because "a previous run wrote this" and "another agent's file owns this identity"
-    are different facts.
+    The markdown layout keys private context by agent (`agent-<domain>/knowledge-base/<project>/`)
+    and the store's `memory_record` carries `agent_id`, so one theme under two agents is two
+    entries. Under the table this replaces, identity was `(project, scope, theme)`, so the second
+    file had nowhere to go and the importer could only report the pair.
     """
     root = _memory_root(tmp_path)
     _write(root / "agent-other" / "knowledge-base" / "proj-a" / "context-index.md", INDEX)
@@ -179,39 +200,37 @@ def test_two_agents_writing_one_private_theme_collide_and_are_reported(tmp_path:
         '---\nproject: "proj-a"\n---\n\n# The other agent\'s delta\n',
     )
 
-    repo = SqliteProjectRepository(tmp_path / "h.db")
+    repo = store
     report = import_markdown(repo, root)
 
-    assert report.entries_collided == 1
-    assert len(report.collisions) == 1
-    assert "agent-other" in report.collisions[0]
-    assert "agent-meta" in report.collisions[0]
-    # The first file read is the one kept, and it is the first because discovery sorts.
-    kept = repo.get_context_entry(project="proj-a", scope=ContextScope.private, theme="delta")
-    assert kept is not None
-    assert "The body." in kept.full_content
-
-    # A dry run sees the same collision, since claiming happens as files are read.
-    report = import_markdown(SqliteProjectRepository(tmp_path / "other.db"), root, dry_run=True)
-    assert report.entries_collided == 1
+    assert report.entries_collided == 0
+    assert report.collisions == []
+    mine = repo.get_context_entry(
+        project="proj-a", scope=ContextScope.private, theme="delta", agent="meta"
+    )
+    theirs = repo.get_context_entry(
+        project="proj-a", scope=ContextScope.private, theme="delta", agent="other"
+    )
+    assert mine is not None and "The body." in mine.full_content
+    assert theirs is not None and "other agent" in theirs.full_content
 
 
-def test_a_dry_run_writes_no_rows(tmp_path: Path) -> None:
-    repo = SqliteProjectRepository(tmp_path / "h.db")
+def test_a_dry_run_writes_no_rows(tmp_path: Path, store) -> None:
+    repo = store
     report = import_markdown(repo, _memory_root(tmp_path), dry_run=True)
 
     assert report.entries_created == 4 and report.maps_created == 1
-    assert repo.list_context_entries(project="proj-a") == []
+    assert repo.list_context_entries(project="proj-a", scope=ContextScope.shared) == []
     assert repo.map_exists(project="proj-a") is False
 
 
-def test_a_frontmatter_project_that_disagrees_is_reported_not_obeyed(tmp_path: Path) -> None:
+def test_a_frontmatter_project_that_disagrees_is_reported_not_obeyed(tmp_path: Path, store) -> None:
     root = _memory_root(tmp_path)
     _write(
         root / "shared-memory" / "proj-b" / "context" / "stray.md",
         '---\nproject: "proj-a"\n---\n\n# Stray\n',
     )
-    repo = SqliteProjectRepository(tmp_path / "h.db")
+    repo = store
     report = import_markdown(repo, root)
 
     assert len(report.project_mismatches) == 1
@@ -224,27 +243,36 @@ def test_a_frontmatter_project_that_disagrees_is_reported_not_obeyed(tmp_path: P
 
 
 def test_main_reports_a_missing_source_directory(tmp_path: Path, capsys) -> None:
-    assert main(["--source", str(tmp_path / "nope")]) == 2
+    code = main(["--source", str(tmp_path / "nope"), "--iss", ISSUER, "--sub", SUB])
+    assert code == 2
     assert "not a directory" in capsys.readouterr().out
 
 
-def test_main_imports_into_the_configured_store(tmp_path: Path, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("HERMOD_DB_BACKEND", "sqlite")
-    pytest.skip(
-        "the CLI writes through the store, which this plan is replacing: it converts with the "
-        "importer retarget in Phase 3"
-    )
-    monkeypatch.setenv("HERMOD_DB_PATH", str(tmp_path / "cli.db"))
+def test_main_imports_into_the_tenant_the_pair_names(
+    tmp_path: Path, monkeypatch, capsys, store
+) -> None:
+    monkeypatch.setenv("HERMOD_DB_URL", os.environ["HERMOD_PG_TEST_URL"])
     root = _memory_root(tmp_path)
+    argv = ["--source", str(root), "--iss", ISSUER, "--sub", SUB]
 
-    assert main(["--source", str(root), "--dry-run"]) == 0
+    assert main([*argv, "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "dry run" in out
     assert "4 written" in out
 
-    assert main(["--source", str(root)]) == 0
+    assert main(argv) == 0
     assert "imported" in capsys.readouterr().out
-    repo = SqliteProjectRepository(tmp_path / "cli.db")
     # alpha and beta are shared, delta is the private entry for the same project.
-    assert len(repo.list_context_entries(project="proj-a")) == 3
-    assert repo.map_exists(project="proj-a") is True
+    assert len(store.list_context_entries(project="proj-a", agent="meta")) == 3
+    assert store.map_exists(project="proj-a") is True
+
+
+def test_main_refuses_a_pair_nobody_has_signed_in_with(
+    tmp_path: Path, monkeypatch, capsys, store
+) -> None:
+    """End to end: the importer will not invent the tenant it writes for."""
+    monkeypatch.setenv("HERMOD_DB_URL", os.environ["HERMOD_PG_TEST_URL"])
+    root = _memory_root(tmp_path)
+    code = main(["--source", str(root), "--iss", ISSUER, "--sub", "never-signed-in"])
+    assert code == 2
+    assert "refuses to invent" in capsys.readouterr().out

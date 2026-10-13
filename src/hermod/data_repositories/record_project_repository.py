@@ -69,9 +69,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def entry_uuid(*, user_id: str, project: str, scope: ContextScope, theme: str) -> str:
-    """The stable identity of an entry — the key the store is written under."""
-    return str(_uuidlib.uuid5(_UUID_NS, f"{user_id}|{project}|{scope.value}|{theme}"))
+def entry_uuid(
+    *,
+    user_id: str,
+    project: str,
+    scope: ContextScope,
+    theme: str,
+    agent: str | None = None,
+) -> str:
+    """The stable identity of an entry — the key the store is written under.
+
+    The owner is part of it for the private scope, because `memory_record` carries `agent_id`:
+    leaving it out would give two agents' rows for one theme a single identity, which is the
+    collision this move exists to remove.
+    """
+    return str(
+        _uuidlib.uuid5(_UUID_NS, f"{user_id}|{project}|{scope.value}|{agent or ''}|{theme}")
+    )
 
 
 def map_uuid(*, user_id: str, project: str) -> str:
@@ -146,7 +160,11 @@ class RecordProjectRepository:
         """
         owner = self._require_agent(agent) if entry.scope is ContextScope.private else None
         identity = entry_uuid(
-            user_id=self._user_id, project=entry.project, scope=entry.scope, theme=entry.theme
+            user_id=self._user_id,
+            project=entry.project,
+            scope=entry.scope,
+            theme=entry.theme,
+            agent=owner,
         )
         created = entry.created_date or _now()
         modified = entry.modified_date or created
@@ -218,10 +236,13 @@ class RecordProjectRepository:
         self, entry: ContextEntry, *, agent: str | None = None
     ) -> ContextEntry:
         """Replace a live entry's body, summary and tags; ``created_date`` is preserved."""
-        if entry.scope is ContextScope.private:
-            self._require_agent(agent)
+        owner = self._require_agent(agent) if entry.scope is ContextScope.private else None
         identity = entry_uuid(
-            user_id=self._user_id, project=entry.project, scope=entry.scope, theme=entry.theme
+            user_id=self._user_id,
+            project=entry.project,
+            scope=entry.scope,
+            theme=entry.theme,
+            agent=owner,
         )
         table = "memory_record" if entry.scope is ContextScope.private else "shared_record"
         with self._conn() as conn, conn.cursor() as cur:
@@ -308,9 +329,10 @@ class RecordProjectRepository:
         uuid stays and a later create over the same theme revives it rather than adding a second
         row for one identity.
         """
-        if scope is ContextScope.private:
-            self._require_agent(agent)
-        identity = entry_uuid(user_id=self._user_id, project=project, scope=scope, theme=theme)
+        owner = self._require_agent(agent) if scope is ContextScope.private else None
+        identity = entry_uuid(
+            user_id=self._user_id, project=project, scope=scope, theme=theme, agent=owner
+        )
         table = "memory_record" if scope is ContextScope.private else "shared_record"
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(

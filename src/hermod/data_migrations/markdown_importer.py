@@ -34,7 +34,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from hermod.app import build_project_repository, validate_backend
+from hermod.app import build_project_repository, validate_store
+from hermod.business_services.tenant_resolver import TenantResolver
 from hermod.configuration.config import load_config
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 from hermod.data_repositories.project_repository import ProjectRepository
@@ -49,11 +50,17 @@ _FRONTMATTER_DELIM = "---"
 
 @dataclass(frozen=True)
 class EntrySource:
-    """One markdown entry file, and the identity the store will hold it under."""
+    """One markdown entry file, and the identity the store will hold it under.
+
+    ``agent`` is the owner, and it is populated for the private scope only: the markdown path
+    carries it (`agent-<domain>/knowledge-base/...`), so an importer reading files has to carry it
+    across, exactly as the path did.
+    """
 
     path: Path
     project: str
     scope: ContextScope
+    agent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -243,7 +250,11 @@ def discover(source_root: Path) -> tuple[list[EntrySource], list[MapSource]]:
                     continue
                 entries.append(
                     EntrySource(
-                        path=path, project=project_dir.name, scope=ContextScope.private
+                        path=path,
+                        project=project_dir.name,
+                        scope=ContextScope.private,
+                        # The folder is `agent-<domain>`; the store's agent id is the domain.
+                        agent=agent_dir.name.removeprefix("agent-"),
                     )
                 )
 
@@ -266,12 +277,10 @@ def import_markdown(
     report = ImportReport()
 
     # Claimed as they are read, not as they are written, so two files wanting one row are caught
-    # whether the run writes or not. That case is not an error in the data: the markdown layout
-    # keeps private context per agent (`agent-[domain]/knowledge-base/[project]/`) while the
-    # store's identity is `(project, scope, theme)`, so a theme two agents both wrote has one row
-    # available and the importer can only keep the first. It says so rather than counting it as
-    # already present, because the two mean different things.
-    claimed: dict[tuple[str, str, str], Path] = {}
+    # whether the run writes or not. The key is the whole identity, **agent included**: the store
+    # carries `agent_id`, so the same theme under two agents is two entries rather than a
+    # collision, which is what this importer used to have to report.
+    claimed: dict[tuple[str, str, str | None, str], Path] = {}
 
     for source in entries:
         try:
@@ -287,7 +296,7 @@ def import_markdown(
                 f"{source.project!r} (imported under the directory)"
             )
 
-        identity = (entry.project, entry.scope.value, entry.theme)
+        identity = (entry.project, entry.scope.value, source.agent, entry.theme)
         holder = claimed.get(identity)
         if holder is not None:
             report.entries_collided += 1
@@ -297,12 +306,12 @@ def import_markdown(
         claimed[identity] = source.path
 
         try:
-            if _entry_present(repo, entry):
+            if _entry_present(repo, entry, source.agent):
                 report.entries_skipped += 1
             elif dry_run:
                 report.entries_created += 1
             else:
-                repo.create_context_entry(entry)
+                repo.create_context_entry(entry, agent=source.agent)
                 report.entries_created += 1
         except ValueError:
             # The store refused the create, which for a create means the identity is taken. A
@@ -333,9 +342,11 @@ def import_markdown(
     return report
 
 
-def _entry_present(repo: ProjectRepository, entry: ContextEntry) -> bool:
+def _entry_present(repo: ProjectRepository, entry: ContextEntry, agent: str | None) -> bool:
     return (
-        repo.get_context_entry(project=entry.project, scope=entry.scope, theme=entry.theme)
+        repo.get_context_entry(
+            project=entry.project, scope=entry.scope, theme=entry.theme, agent=agent
+        )
         is not None
     )
 
@@ -354,6 +365,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="report what would be written and touch no rows",
     )
+    parser.add_argument(
+        "--iss",
+        required=True,
+        help="the issuer whose tenant this import writes for, e.g. https://auth.lok.quest/oidc",
+    )
+    parser.add_argument(
+        "--sub",
+        required=True,
+        help="the subject of the account that owns the rows being imported",
+    )
     args = parser.parse_args(argv)
 
     source_root = Path(args.source).expanduser()
@@ -361,12 +382,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"not a directory: {source_root}")
         return 2
 
-    # Which store is decided by the environment, never by a flag: the DSN is a secret and does
-    # not belong in a command line or in shell history.
+    # The store is decided by the environment, never by a flag: the DSN is a secret and does not
+    # belong in a command line or in shell history. The *tenant* is named here instead, through the
+    # same pair a login resolves, because this process has no token to read one from.
     config = load_config()
-    validate_backend(config)
-    repo = build_project_repository(config)
-    print(f"store: {config.db_backend}")
+    validate_store(config)
+    try:
+        user_id = TenantResolver(db_url=config.db_url).resolve_existing(args.iss, args.sub)
+    except LookupError as exc:
+        print(exc)
+        return 2
+    repo = build_project_repository(config, user_id=user_id)
+    print(f"tenant: {user_id}")
     print(f"source: {source_root}")
 
     report = import_markdown(repo, source_root, dry_run=args.dry_run)

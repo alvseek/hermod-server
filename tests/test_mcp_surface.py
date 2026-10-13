@@ -16,7 +16,7 @@ from fastmcp import Client, FastMCP
 from hermod.api_mcp.server import INSTRUCTIONS, build_mcp
 from hermod.business_services.context_service import ContextService
 from hermod.content.loader import ContentLoader, ContentSource
-from hermod.data_repositories.sqlite_project_repository import SqliteProjectRepository
+from hermod.data_repositories.record_project_repository import RecordProjectRepository
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "agent-memory-project"
@@ -36,7 +36,9 @@ SERVED = [
 def mcp(tmp_path) -> FastMCP:
     content = ContentLoader([ContentSource(name="project", root=CONTENT)])
     service = ContextService(
-        SqliteProjectRepository(tmp_path / "hermod.db"),
+        # Never connected: this file drives the registration, and no tool it calls reaches the
+        # store. The literal is what the config would hold, not a server anywhere.
+        lambda: RecordProjectRepository(user_id="unused", db_url="postgresql://unused"),
         {name: content.template_version(name) for name in content.list_resources()},
     )
     return build_mcp(content, service)

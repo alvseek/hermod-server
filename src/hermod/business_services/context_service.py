@@ -51,17 +51,13 @@ class ContextService:
 
     def __init__(
         self,
-        repository_for: ProjectRepository | Callable[[], ProjectRepository],
+        repository_for: Callable[[], ProjectRepository],
         template_versions: Mapping[str, str | None] | None = None,
     ) -> None:
-        # A repository, or a factory for one. The server passes a factory, because the tenant is a
-        # property of the *call* and not of the process: the op that runs is the only place a
-        # verified token exists, so the repository cannot be built before it. A repository is still
-        # accepted because a caller that already knows whose data it is (a migration, a test) has
-        # nothing to defer.
-        self._repository_for: Callable[[], ProjectRepository] = (
-            repository_for if callable(repository_for) else (lambda: repository_for)
-        )
+        # A factory, not a repository: the tenant is a property of the *call* and not of the
+        # process, so the op that runs is the only place a verified token exists and the repository
+        # cannot be built before it.
+        self._repository_for = repository_for
         #: Served resource name -> the stamp it carries. Built from the loader, so the expected
         #: stamp is always the template's own and never a second copy that could drift from it.
         self._template_versions: dict[str, str | None] = dict(template_versions or {})
@@ -73,18 +69,33 @@ class ContextService:
     # --- update-project-context / load-project-context ---
 
     def list_context_entries(
-        self, *, project: str, scope: ContextScope | None = None
+        self,
+        *,
+        project: str,
+        scope: ContextScope | None = None,
+        agent: str | None = None,
     ) -> Sequence[ContextEntry]:
         """The project's live entries, both scopes unless one is named. This *is* the context
         index: the markdown backend keeps a separate ``context-index.md``, and here the rows
-        are the index, so ``§ update-context-index`` has nothing to write."""
-        return self._repo().list_context_entries(project=project, scope=scope)
+        are the index, so ``§ update-context-index`` has nothing to write.
+
+        ``agent`` is required once the private scope is in play: it owns those rows, and the token
+        names the person rather than the agent, so it cannot be derived from the call.
+        """
+        return self._repo().list_context_entries(project=project, scope=scope, agent=agent)
 
     def read_context_entry(
-        self, *, project: str, scope: ContextScope, theme: str
+        self,
+        *,
+        project: str,
+        scope: ContextScope,
+        theme: str,
+        agent: str | None = None,
     ) -> ContextEntry | None:
-        """One entry whole, or ``None``."""
-        return self._repo().get_context_entry(project=project, scope=scope, theme=theme)
+        """One entry whole, or ``None``. ``agent`` is required for the private scope."""
+        return self._repo().get_context_entry(
+            project=project, scope=scope, theme=theme, agent=agent
+        )
 
     def create_context_entry(
         self,
@@ -96,9 +107,14 @@ class ContextService:
         template_version: str,
         description: str | None = None,
         tags: Sequence[str] | None = None,
+        agent: str | None = None,
     ) -> ContextEntry:
         """Create one entry. Refuses an oversized body (``§ check-entry-size``), a missing or stale
-        template stamp (``§ template``), and an identity that is already taken."""
+        template stamp (``§ template``), and an identity that is already taken.
+
+        ``agent`` is required for the private scope, where it is part of the entry's identity
+        rather than a label: the same theme under two agents is two entries.
+        """
         self._refuse_oversized(content)
         self._refuse_stale_template(_ENTRY_TEMPLATE, template_version)
         return self._repo().create_context_entry(
@@ -109,7 +125,8 @@ class ContextService:
                 full_content=content,
                 description=description,
                 tags=list(tags or []),
-            )
+            ),
+            agent=agent,
         )
 
     def update_context_entry(
@@ -122,6 +139,7 @@ class ContextService:
         template_version: str,
         description: str | None = None,
         tags: Sequence[str] | None = None,
+        agent: str | None = None,
     ) -> ContextEntry:
         """Replace a live entry's body, description and tags. Refuses an oversized body, and a
         missing or stale template stamp — it restates the whole document, so it carries the same
@@ -129,6 +147,7 @@ class ContextService:
 
         A wholesale replace, matching the markdown backend's write-back of the whole entry:
         an omitted ``description`` or ``tags`` clears it rather than preserving the stored value.
+        ``agent`` is required for the private scope, as it is all the way down.
         """
         self._refuse_oversized(content)
         self._refuse_stale_template(_ENTRY_TEMPLATE, template_version)
@@ -140,7 +159,8 @@ class ContextService:
                 full_content=content,
                 description=description,
                 tags=list(tags or []),
-            )
+            ),
+            agent=agent,
         )
 
     def move_context_entry(
@@ -150,16 +170,31 @@ class ContextService:
         theme: str,
         from_scope: ContextScope,
         to_scope: ContextScope,
+        agent: str | None = None,
     ) -> ContextEntry:
-        """Change a live entry's scope, body untouched — the store's one-step form of the
-        markdown backend's copy-then-delete."""
+        """Change a live entry's scope, body untouched. Two steps underneath, because the scope is
+        which *table* the row lives in: the markdown backend copies then deletes for the same
+        reason, and the same exposure to a partial move is reported rather than hidden."""
         return self._repo().move_context_entry(
-            project=project, theme=theme, from_scope=from_scope, to_scope=to_scope
+            project=project,
+            theme=theme,
+            from_scope=from_scope,
+            to_scope=to_scope,
+            agent=agent,
         )
 
-    def delete_context_entry(self, *, project: str, scope: ContextScope, theme: str) -> None:
-        """Tombstone one entry."""
-        self._repo().delete_context_entry(project=project, scope=scope, theme=theme)
+    def delete_context_entry(
+        self,
+        *,
+        project: str,
+        scope: ContextScope,
+        theme: str,
+        agent: str | None = None,
+    ) -> None:
+        """Tombstone one entry. ``agent`` is required for the private scope."""
+        self._repo().delete_context_entry(
+            project=project, scope=scope, theme=theme, agent=agent
+        )
 
     def check_entry_size(self, *, content: str) -> SizeVerdict:
         """Measure an entry against the cap. A pure measurement: ``create`` and ``update`` are

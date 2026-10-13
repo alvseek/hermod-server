@@ -20,9 +20,16 @@ from fastmcp import Client
 from hermod.app import MCP_MOUNT_PATH, build_app
 from hermod.configuration.config import Config
 from hermod.content.loader import ContentLoader, ContentSource
+from tests.conftest import TEST_ISSUER, auth_for, token_for
+from tests.valaskjalf_schema import make_store
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "agent-memory-project"
+
+#: A caller for the round trip. The tenant comes from a token, so a test that writes to the store
+#: has to present one; `auth_for` is the doubled verifier that accepts exactly this string.
+SUBJECT = "e2e"
+TOKEN = token_for(SUBJECT)
 
 
 def _free_port() -> int:
@@ -32,22 +39,26 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def live_server(tmp_path) -> Iterator[str]:
+def live_server() -> Iterator[str]:
     """A real uvicorn on a loopback port, yielding the MCP URL a client would be given.
 
-    It skips without a database, because the store is PostgreSQL and nothing else (decision 9).
-    It still drives the store *being replaced*, so it does not move to the record repository here:
-    that belongs with the wiring, and converting it now would be thrown away at the deletions in
-    Step 1.2.
+    Guarded by a doubled verifier and pointed at a real store, because the two facts the round
+    trip depends on are structural: the tenant comes from a token, and the rows are records in
+    Valaskjalf's tables. It skips without a database, since the store is PostgreSQL and nothing
+    else (decision 9).
     """
     import os
 
     url = os.getenv("HERMOD_PG_TEST_URL")
     if not url:
         pytest.skip("HERMOD_PG_TEST_URL not set")
+    # The mapping is seeded so the resolver lands on the tenant whose agent rows exist: a private
+    # write needs an agent for its foreign key, and a tenant invented at first contact would have
+    # none.
+    make_store(url, user_id="alvi", agents=("meta",), identity=(TEST_ISSUER, SUBJECT))
     port = _free_port()
     config = uvicorn.Config(
-        build_app(Config(port=port, db_url=url)),
+        build_app(Config(port=port, db_url=url), auth=auth_for(SUBJECT)),
         host="127.0.0.1",
         port=port,
         log_level="warning",
@@ -66,7 +77,7 @@ def live_server(tmp_path) -> Iterator[str]:
 
 
 async def test_a_real_client_answers_over_http(live_server: str) -> None:
-    async with Client(live_server) as client:
+    async with Client(live_server, auth=TOKEN) as client:
         pong = await client.call_tool("ping", {})
         prompts = await client.list_prompts()
     assert pong.data == "pong"
@@ -74,7 +85,7 @@ async def test_a_real_client_answers_over_http(live_server: str) -> None:
 
 
 async def test_a_real_client_reads_a_composed_procedure(live_server: str) -> None:
-    async with Client(live_server) as client:
+    async with Client(live_server, auth=TOKEN) as client:
         result = await client.call_tool("read_procedure", {"name": "awaken-coder"})
     assert result.data["served"] is True
     assert result.data["content"].startswith("# Awaken Coder")
@@ -88,7 +99,7 @@ async def test_the_transport_does_not_alter_the_prompt(live_server: str) -> None
     transport is the only layer between them that nobody looks at.
     """
     loader = ContentLoader([ContentSource(name="overlay", root=CONTENT)])
-    async with Client(live_server) as client:
+    async with Client(live_server, auth=TOKEN) as client:
         for name in loader.list_prompts():
             result = await client.call_tool("read_procedure", {"name": name})
             assert result.data["content"] == loader.get_prompt(name), name
@@ -115,13 +126,14 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
     loader = ContentLoader([ContentSource(name="overlay", root=CONTENT)])
     stamp = loader.template_version("project-context-template")
     assert stamp, "the served context-entry template carries no stamp"
-    async with Client(live_server) as client:
+    async with Client(live_server, auth=TOKEN) as client:
         created = (
             await client.call_tool(
                 "create_context_entry",
                 {
                     "project": "agent-memory-project",
                     "scope": "private",
+                    "agent": "meta",
                     "theme": "hermod-server-build",
                     "content": "# Hermod Server Build\n\nWhat the build left behind.\n",
                     "template_version": stamp,
@@ -133,7 +145,9 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
         assert created["scope"] == "private"
 
         listed = (
-            await client.call_tool("list_context_entries", {"project": "agent-memory-project"})
+            await client.call_tool(
+                "list_context_entries", {"project": "agent-memory-project", "agent": "meta"}
+            )
         ).data
         assert [(row["scope"], row["theme"]) for row in listed] == [
             ("private", "hermod-server-build")
@@ -145,6 +159,7 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
                 {
                     "project": "agent-memory-project",
                     "scope": "private",
+                    "agent": "meta",
                     "theme": "hermod-server-build",
                 },
             )

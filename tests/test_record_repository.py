@@ -16,7 +16,11 @@ import os
 from pathlib import Path
 
 import pytest
+from fastmcp import Client
 
+from hermod.api_mcp.server import build_mcp
+from hermod.business_services.context_service import MAX_ENTRY_LINES, ContextService
+from hermod.content.loader import ContentLoader, ContentSource
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 from hermod.data_repositories.record_project_repository import (
     MAP_TITLE,
@@ -26,6 +30,9 @@ from hermod.data_repositories.record_project_repository import (
     map_uuid,
 )
 from tests.valaskjalf_schema import make_store
+
+ROOT = Path(__file__).resolve().parents[1]
+CONTENT = ROOT / "agent-memory-project"
 
 USER = "alvi"
 PROJECT = "hermod-server"
@@ -265,3 +272,79 @@ def test_the_map_is_created_once_and_rewritten_after(store) -> None:
 def test_writing_a_map_that_does_not_exist_is_a_lookup_error(store) -> None:
     with pytest.raises(LookupError):
         store.write_map(OrientationMap(project=PROJECT, full_content="# Map\n"))
+
+
+# --- the service layer, over the same store ------------------------------------------
+#
+# These three came from `test_store.py` as it went. Its repository and migration tests covered the
+# store this plan removes; what had to survive is the *service's* part — the stamp gate, the size
+# cap, and the fact that a store's reads need no overlay checkout — because none of that is the
+# table's business and none of it is covered anywhere else.
+
+
+def _service(store, *, with_overlay: bool = True):
+    root = CONTENT if with_overlay else Path("no-such-checkout")
+    loader = ContentLoader([ContentSource(name="overlay", root=root)])
+    versions = {name: loader.template_version(name) for name in loader.list_resources()}
+    return loader, ContextService(lambda: store, versions)
+
+
+def test_a_write_must_declare_the_stamp_the_served_template_carries(store) -> None:
+    loader, service = _service(store)
+    stamp = loader.template_version("project-context-template")
+
+    with pytest.raises(ValueError, match="template_version is required"):
+        service.create_context_entry(
+            project=PROJECT, scope=ContextScope.shared, theme="t", content="# T\n",
+            template_version="",
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        service.create_context_entry(
+            project=PROJECT, scope=ContextScope.shared, theme="t", content="# T\n",
+            template_version="stale",
+        )
+    created = service.create_context_entry(
+        project=PROJECT, scope=ContextScope.shared, theme="t", content="# T\n",
+        template_version=stamp,
+    )
+    assert created.theme == "t"
+
+
+def test_an_entry_over_the_line_cap_is_refused_rather_than_split(store) -> None:
+    """The markdown backend splits an overgrown entry; a row has no second file, so it refuses."""
+    _, service = _service(store)
+    stamp = service._template_versions["project-context-template"]
+    huge = "\n".join(f"line {i}" for i in range(MAX_ENTRY_LINES + 1))
+
+    verdict = service.check_entry_size(content=huge)
+    assert verdict.oversized is True
+    assert verdict.max_lines == MAX_ENTRY_LINES
+    with pytest.raises(ValueError, match="over the"):
+        service.create_context_entry(
+            project=PROJECT, scope=ContextScope.shared, theme="big", content=huge,
+            template_version=stamp,
+        )
+
+
+async def test_reads_need_no_overlay_checkout_and_writes_say_why_they_do(store) -> None:
+    """A store's reads are the store's. Its writes need the template, which needs the checkout."""
+    loader, service = _service(store, with_overlay=False)
+    mcp = build_mcp(loader, service)
+
+    async with Client(mcp) as client:
+        assert await client.list_prompts() == []
+        listed = await client.call_tool(
+            "list_context_entries", {"project": PROJECT, "scope": "shared"}
+        )
+        assert listed.data == []
+        with pytest.raises(Exception, match="is not served"):
+            await client.call_tool(
+                "create_context_entry",
+                {
+                    "project": PROJECT,
+                    "scope": "shared",
+                    "theme": "t",
+                    "content": "# T\n",
+                    "template_version": "anything",
+                },
+            )

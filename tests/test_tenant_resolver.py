@@ -76,6 +76,21 @@ def test_a_second_resolve_leaves_the_stored_labels_alone(resolver: TenantResolve
     assert _account(resolver, first) == {"display_name": "First", "email": "one@example.com"}
 
 
+def test_resolve_existing_finds_a_pair_that_is_mapped(resolver: TenantResolver) -> None:
+    mapped = resolver.resolve(ISSUER, "sub-a")
+    assert resolver.resolve_existing(ISSUER, "sub-a") == mapped
+
+
+def test_resolve_existing_refuses_an_unmapped_pair(resolver: TenantResolver) -> None:
+    """The importer's guard: it must never invent the tenant it writes for."""
+    resolver.resolve(ISSUER, "sub-a")
+    with pytest.raises(LookupError, match="refuses to invent"):
+        resolver.resolve_existing(ISSUER, "never-signed-in")
+    # And the pair is exact: the same subject under another issuer is still unmapped.
+    with pytest.raises(LookupError):
+        resolver.resolve_existing(OTHER_ISSUER, "sub-a")
+
+
 def test_a_call_with_no_token_names_no_tenant(resolver: TenantResolver) -> None:
     with pytest.raises(MissingTokenError, match="no verified token"):
         resolver.current_user_id()

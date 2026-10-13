@@ -79,6 +79,27 @@ class TenantResolver:
             display_name=claims.get("name"),
         )
 
+    def resolve_existing(self, iss: str, sub: str) -> str:
+        """The tenant for a pair that must already be mapped, refusing when it is not.
+
+        For a caller with no token. The importer runs as an offline CLI, so it cannot use
+        ``current_user_id``, and it must not use ``resolve``: importing into a tenant that did not
+        exist a moment ago is almost certainly a typo, and it is the kind of mistake that takes
+        longest to notice, because the rows land somewhere valid and nothing errors.
+        """
+        with psycopg.connect(self._db_url, row_factory=tuple_row) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id FROM user_identity WHERE iss = %s AND sub = %s", (iss, sub)
+            )
+            found = cur.fetchone()
+        if found is None:
+            raise LookupError(
+                f"no tenant is mapped to iss={iss!r} sub={sub!r}, and an import refuses to invent "
+                "one: it would write a second tenant's worth of rows that no login would ever "
+                "reach. Sign in once with that account, or check the pair."
+            )
+        return found[0]
+
     # --- the write ------------------------------------------------------------------
 
     def resolve(

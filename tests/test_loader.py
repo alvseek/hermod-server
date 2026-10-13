@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "agent-memory-project"
 
 SERVED = [
+    "add-coding-reasoning",
     "awaken-coder",
     "load-project-context",
     "map-orientation",

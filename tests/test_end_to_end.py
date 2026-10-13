@@ -81,7 +81,11 @@ async def test_a_real_client_answers_over_http(live_server: str) -> None:
         pong = await client.call_tool("ping", {})
         prompts = await client.list_prompts()
     assert pong.data == "pong"
-    assert len(prompts) == 7
+    # Compared against the loader rather than against a number. The served count was written as a
+    # literal in three test files and drifted in all three when a procedure was added, so the
+    # claim here is the one that actually matters: the transport serves what the loader composes.
+    served = ContentLoader([ContentSource(name="overlay", root=CONTENT)]).list_prompts()
+    assert sorted(prompt.name for prompt in prompts) == sorted(served)
 
 
 async def test_a_real_client_reads_a_composed_procedure(live_server: str) -> None:

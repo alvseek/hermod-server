@@ -41,8 +41,8 @@ INSTRUCTIONS = (
     "coding awakening, project context, the orientation map, the session wrap-up, and "
     "push/pull.\n"
     'Start with read_procedure("awaken-coder") and follow it; help() lists everything served.\n'
-    "Project context and the orientation map live in this server's own store; the store tools "
-    "read and write them.\n"
+    "Project context and the orientation map are the memory store's records, scoped by project; "
+    "the store tools read and write them.\n"
     "Agent memory is Munnin's, not this server's: a coding client connects both.\n"
     "Procedures come from read_procedure(name), never from slash commands."
 )
@@ -256,8 +256,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
     code behind them (``§ ensure-context-dir``, ``§ update-context-index``) get no tool: the backend
     document declares them no-ops, so there is nothing to call.
 
-    Registered independently of ``content``: the store is a local file, so it is served whether or
-    not an overlay checkout is present.
+    Registered independently of ``content``: the store reaches the memory database by DSN, so its
+    tools are served whether or not an overlay checkout is present.
     """
 
     def _entry(entry: ContextEntry, *, with_content: bool) -> dict[str, Any]:

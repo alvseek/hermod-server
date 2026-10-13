@@ -353,7 +353,7 @@ def test_a_missing_or_stale_template_stamp_is_refused(service) -> None:
 def test_an_unserved_template_cannot_be_checked(service) -> None:
     """A service with no served stamps refuses rather than waving the write through: the gate's
     whole point is that a caller cannot store a document it never read."""
-    bare = ContextService(service._repository)
+    bare = ContextService(service._repository_for)
     with pytest.raises(ValueError, match="is not served"):
         bare.create_context_entry(
             project="p",

@@ -22,7 +22,7 @@ keeps whole documents rather than blocks.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
@@ -51,13 +51,24 @@ class ContextService:
 
     def __init__(
         self,
-        repository: ProjectRepository,
+        repository_for: ProjectRepository | Callable[[], ProjectRepository],
         template_versions: Mapping[str, str | None] | None = None,
     ) -> None:
-        self._repository = repository
+        # A repository, or a factory for one. The server passes a factory, because the tenant is a
+        # property of the *call* and not of the process: the op that runs is the only place a
+        # verified token exists, so the repository cannot be built before it. A repository is still
+        # accepted because a caller that already knows whose data it is (a migration, a test) has
+        # nothing to defer.
+        self._repository_for: Callable[[], ProjectRepository] = (
+            repository_for if callable(repository_for) else (lambda: repository_for)
+        )
         #: Served resource name -> the stamp it carries. Built from the loader, so the expected
         #: stamp is always the template's own and never a second copy that could drift from it.
         self._template_versions: dict[str, str | None] = dict(template_versions or {})
+
+    def _repo(self) -> ProjectRepository:
+        """The repository for the call in progress, built once per op."""
+        return self._repository_for()
 
     # --- update-project-context / load-project-context ---
 
@@ -67,13 +78,13 @@ class ContextService:
         """The project's live entries, both scopes unless one is named. This *is* the context
         index: the markdown backend keeps a separate ``context-index.md``, and here the rows
         are the index, so ``§ update-context-index`` has nothing to write."""
-        return self._repository.list_context_entries(project=project, scope=scope)
+        return self._repo().list_context_entries(project=project, scope=scope)
 
     def read_context_entry(
         self, *, project: str, scope: ContextScope, theme: str
     ) -> ContextEntry | None:
         """One entry whole, or ``None``."""
-        return self._repository.get_context_entry(project=project, scope=scope, theme=theme)
+        return self._repo().get_context_entry(project=project, scope=scope, theme=theme)
 
     def create_context_entry(
         self,
@@ -90,7 +101,7 @@ class ContextService:
         template stamp (``§ template``), and an identity that is already taken."""
         self._refuse_oversized(content)
         self._refuse_stale_template(_ENTRY_TEMPLATE, template_version)
-        return self._repository.create_context_entry(
+        return self._repo().create_context_entry(
             ContextEntry(
                 project=project,
                 scope=scope,
@@ -121,7 +132,7 @@ class ContextService:
         """
         self._refuse_oversized(content)
         self._refuse_stale_template(_ENTRY_TEMPLATE, template_version)
-        return self._repository.update_context_entry(
+        return self._repo().update_context_entry(
             ContextEntry(
                 project=project,
                 scope=scope,
@@ -142,13 +153,13 @@ class ContextService:
     ) -> ContextEntry:
         """Change a live entry's scope, body untouched — the store's one-step form of the
         markdown backend's copy-then-delete."""
-        return self._repository.move_context_entry(
+        return self._repo().move_context_entry(
             project=project, theme=theme, from_scope=from_scope, to_scope=to_scope
         )
 
     def delete_context_entry(self, *, project: str, scope: ContextScope, theme: str) -> None:
         """Tombstone one entry."""
-        self._repository.delete_context_entry(project=project, scope=scope, theme=theme)
+        self._repo().delete_context_entry(project=project, scope=scope, theme=theme)
 
     def check_entry_size(self, *, content: str) -> SizeVerdict:
         """Measure an entry against the cap. A pure measurement: ``create`` and ``update`` are
@@ -197,11 +208,11 @@ class ContextService:
 
     def map_exists(self, *, project: str) -> bool:
         """Whether the project has an orientation map. The served ``§ map-exists``."""
-        return self._repository.map_exists(project=project)
+        return self._repo().map_exists(project=project)
 
     def read_map(self, *, project: str) -> OrientationMap | None:
         """The project's map, whole, or ``None``. The served ``§ read-map``."""
-        return self._repository.get_map(project=project)
+        return self._repo().get_map(project=project)
 
     def create_map(
         self,
@@ -214,7 +225,7 @@ class ContextService:
         """Insert the project's map. The served ``§ create-map``; refuses a second map, and a
         missing or stale template stamp."""
         self._refuse_stale_template(_MAP_TEMPLATE, template_version)
-        return self._repository.create_map(
+        return self._repo().create_map(
             OrientationMap(project=project, full_content=content, description=description)
         )
 
@@ -229,6 +240,6 @@ class ContextService:
         """Rewrite the project's map. The served ``§ write-map``; refuses a missing or stale
         template stamp, since it restates the whole document."""
         self._refuse_stale_template(_MAP_TEMPLATE, template_version)
-        return self._repository.write_map(
+        return self._repo().write_map(
             OrientationMap(project=project, full_content=content, description=description)
         )

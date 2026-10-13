@@ -156,3 +156,7 @@ async def test_the_awakening_tool_is_registered_and_refuses_an_empty_set(mcp: Fa
         assert "awaken_coder" in names
         with pytest.raises(Exception, match="at least one project"):
             await client.call_tool("awaken_coder", {"domain": "meta", "projects": []})
+        # A blank element is refused too: `projects[0]` is the session's repository, so filtering
+        # one out would answer about a different repository than the caller named.
+        with pytest.raises(Exception, match="must name one"):
+            await client.call_tool("awaken_coder", {"domain": "meta", "projects": [""]})

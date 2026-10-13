@@ -40,10 +40,13 @@ class AwakeningService:
         earlier, so an agent that does not exist has already failed one call, and a second check
         here would be a second opinion about a table this server does not own.
         """
-        ordered = [project for project in projects if project]
-        if not ordered:
+        ordered = list(projects)
+        # An empty element is refused rather than filtered out: `projects[0]` *is* the session's
+        # repository, so quietly dropping a blank would answer about a different one.
+        if not ordered or any(not project for project in ordered):
             raise ValueError(
-                "a coding awakening needs at least one project: the session's own repository"
+                "a coding awakening needs at least one project, and every entry must name one: "
+                "the first is the session's own repository"
             )
         repo = self._repository_for()
 
@@ -66,8 +69,7 @@ class AwakeningService:
             # the set's episodes: the index to choose from, and the newest body per project, which
             # is where the open items a session carries forward actually live
             "episode_index": [
-                _index_row(entry)
-                for entry in repo.episode_index(agent=domain, projects=ordered)
+                _index_row(entry) for entry in repo.episode_index(agent=domain, projects=ordered)
             ],
             "episodes": [
                 _episode_row(episode)

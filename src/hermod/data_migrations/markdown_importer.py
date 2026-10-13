@@ -39,6 +39,7 @@ from hermod.business_services.tenant_resolver import TenantResolver
 from hermod.configuration.config import load_config
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 from hermod.data_repositories.project_repository import ProjectRepository
+from hermod.data_repositories.record_project_repository import MissingAgentError
 
 #: The index file, which is a projection of the entries rather than one of them: the markdown
 #: backend writes it beside them and the store derives it from the rows.
@@ -269,9 +270,11 @@ def import_markdown(
 ) -> ImportReport:
     """Write every discovered entry and map through ``repo``; report what happened.
 
-    A read-only pass when ``dry_run`` is set, except for one thing worth stating: reading needs
-    the schema, so the first connection applies any pending migration even on a dry run. It
-    creates tables and touches no rows.
+    A read-only pass when ``dry_run`` is set, with one caveat that is not this function's doing:
+    reading needs the record tables to exist, and nothing here creates them. Hermod issues no DDL
+    (ADR-027), so a missing table or column surfaces on the first call rather than being applied —
+    which means a dry run against a database the memory store has never migrated fails loudly
+    instead of reporting counts.
     """
     entries, maps = discover(source_root)
     report = ImportReport()
@@ -313,9 +316,14 @@ def import_markdown(
             else:
                 repo.create_context_entry(entry, agent=source.agent)
                 report.entries_created += 1
+        except MissingAgentError as exc:
+            # The agent has no row in the store, so this entry was **not** written. It is a failure
+            # rather than a skip: counting it as "already present" would let a run that wrote
+            # nothing report success, and this count is what a verification reads.
+            report.failed.append(f"{source.path}: {exc}")
         except ValueError:
-            # The store refused the create, which for a create means the identity is taken. A
-            # dry run cannot see this one, since it never writes; both count it the same way.
+            # The other refusal a create can raise: the identity is taken. A dry run cannot see
+            # this one, since it never writes; both count it the same way.
             report.entries_skipped += 1
         except Exception as exc:  # noqa: BLE001 — a bad file must not end the run
             report.failed.append(f"{source.path}: {exc}")

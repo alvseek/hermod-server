@@ -1,16 +1,20 @@
 """Hermod configuration.
 
-**Local by default, verified when hosted.** Hermod reads a repository on the machine it runs on,
-so its shipped shape binds loopback and asks nobody to log in. That default is safe but it is not
-sufficient the moment the server is reachable beyond this machine: the MCP face exposes the project
-store **read and write**, so a server anyone can reach would be one anyone can rewrite.
+**Two shapes, one switch: the issuer.** With an issuer configured, the MCP face verifies every
+token, and the verified token names the tenant whose rows the call may touch. With none, the
+server runs the **local** shape: loopback only and unverified, with the two guards below refusing
+any configuration that would leave it reachable from elsewhere.
+
+Local mode serves the **content** surface — the overlay's procedures and templates — and nothing
+past it. It cannot serve the store, because the tenant comes from a token: every store op raises
+rather than answering under a guessed account. That is why the DSN is required in both shapes, and
+why a local run is a way to read the overlay rather than a way to use the store.
 
 ``logto_endpoint``, ``logto_audience`` and ``public_base_url`` configure the token verification that
 stands in front of it when it is hosted. None of them is a secret: a resource server verifies
 against a **public** JWKS and holds no client credential, which is why these sit in plain config
-rather than behind the deploy's secret handling. The shape is Munnin's, ported, minus its tenancy —
-Hermod's store is project-keyed rather than caller-keyed, so a verified token is a gate here and
-never a tenant.
+rather than behind the deploy's secret handling. The shape is Munnin's, ported: Hermod resolves a
+tenant from the verified token exactly as Munnin does, because the rows it reads carry one.
 
 Two settings deserve a word because they are the seams the plan put here rather than in code:
 
@@ -56,22 +60,6 @@ class Config:
     # set, Logto mints the tokens the MCP face verifies. The OIDC paths beneath it are fixed by
     # Logto, so they are derived rather than configured.
     logto_endpoint: str = ""
-    # Overrides the audience tokens are checked against. Normally left empty, because the audience
-    # binds itself to the resource URL this server advertises. Set it when the registered API
-    # Identifier differs from that URL, or when more than one is in play: a token request's
-    # ``resource`` parameter has to match a registered identifier character for character, and a
-    # client that authorizes against one identifier while refreshing against another mints tokens
-    # under both. Comma-separated, so a rename never needs a window in which neither is accepted.
-    logto_audience: tuple[str, ...] = ()
-    # Whether the MCP face carries a verified token is decided by whether an issuer is configured,
-    # and by nothing else — there is no mode switch here, deliberately. Munnin's switch works
-    # because its default is ``token``; a switch on this server would be a field that can be set
-    # wrong, and its two plausible defaults fail differently (one refuses the documented local run,
-    # the other can silently leave a configured issuer unused). With the issuer itself as the switch
-    # there is no third state to get wrong: tokens are verified exactly when there is something to
-    # verify against, and the loopback guards below refuse to run open on a server anything else can
-    # reach.
-    #
     # Overrides the audience tokens are checked against. Normally left empty, because the audience
     # binds itself to the resource URL this server advertises. Set it when the registered API
     # Identifier differs from that URL, or when more than one is in play: a token request's

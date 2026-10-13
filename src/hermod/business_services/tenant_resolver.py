@@ -15,7 +15,9 @@ The mechanism is Munnin's, deliberately, including the parts that look optional:
   string is never load-bearing across an issuer change.
 - **The write is re-read afterwards**, because two simultaneous first logins for one pair both
   reach the create and only one row survives the idempotent insert; the stored answer is the true
-  one.
+  one. The loser leaves its `account` row behind — nothing points at it, no memory reaches it, and
+  no read can see it — which is the price of settling that race by re-reading rather than by
+  locking the pair.
 - **Email and display name are labels for a new tenant only, never a lookup key.** An issuer may
   reassign an address to somebody else, so matching on it could hand over a stranger's memory.
 """

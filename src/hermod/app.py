@@ -13,8 +13,10 @@ There is no HTTP API face. What there is, once an issuer is configured, is token
 front of the MCP face: the project store is readable *and* writable, so a server anyone can reach
 must not be one anyone can write. ``/health`` stays open on purpose — the deploy's own health gate
 calls it without a credential, so guarding it would fail the cutover. The verification is Munnin's,
-ported, minus its tenancy: a Logto JWKS verifier bound to the resource identifier this server
-advertises, plus the RFC 9728 document a client reads to discover who mints its tokens.
+ported: a Logto JWKS verifier bound to the resource identifier this server advertises, plus the
+RFC 9728 document a client reads to discover who mints its tokens. The token is not only a gate —
+it names the tenant whose rows the call may touch, so a verified token is what makes the store
+reachable at all.
 """
 
 from __future__ import annotations

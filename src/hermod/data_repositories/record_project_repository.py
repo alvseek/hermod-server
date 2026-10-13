@@ -20,12 +20,14 @@ Four things follow from not owning the store, and each one explains a line below
   what the markdown backend addressed an entry by, so it rides in `title`, and an entry's
   identity is exactly what a `uuid5` over its parts produces.
 
-**PostgreSQL only, deliberately.** Hermod has no local serving shape (a login is what names its
-tenant, so an unauthenticated start is refused), which means the only store it ever reads is the
-deployed one. SQLite was carried here to let the suite run without a service, and it was removed
-for the reason it was dubious: a second implementation of the contract that nothing deploys can
-drift with no consequence, and CI supplies PostgreSQL in a few lines instead. The class is smaller
-for it.
+**PostgreSQL only, deliberately.** The store has no local shape: a verified token is what names the
+tenant a call may touch, so with no issuer there is nothing to resolve a tenant from and every store
+op raises rather than answering under a guessed account. (The *content* surface — procedures and
+templates — does run unauthenticated on loopback; only the store needs a token.) That means the only
+store Hermod ever reads is the deployed one, and SQLite was carried here to let the suite run
+without a service before being removed for the reason it was dubious: a second implementation of the
+contract that nothing deploys can drift with no consequence, and CI supplies PostgreSQL in a few
+lines instead. The class is smaller for it.
 """
 
 from __future__ import annotations
@@ -67,6 +69,17 @@ _MEMORY_INSERT = (
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class MissingAgentError(ValueError):
+    """A private write named an agent this account has no row for.
+
+    A ``ValueError`` like the duplicate refusal, because both are caller mistakes and both surface
+    the same way through the served tools — but a *distinct* type, because the two mean opposite
+    things to a caller that counts outcomes: one says "already there", the other says "not written".
+    The importer relies on that difference, and collapsing them made a missing agent read as an
+    entry that was already present.
+    """
 
 
 def entry_uuid(
@@ -227,7 +240,7 @@ class RecordProjectRepository:
         ) from exc
 
     def _refuse_missing_agent(self, agent: str | None, exc: Exception | None = None) -> None:
-        raise ValueError(
+        raise MissingAgentError(
             f"no agent {agent!r} exists for this account, so it cannot own a private context "
             "entry yet. Create the agent in the memory store first."
         ) from exc
@@ -278,9 +291,11 @@ class RecordProjectRepository:
     ) -> ContextEntry:
         """Move an entry between scopes: create the row in one table, tombstone it in the other.
 
-        Two steps rather than one UPDATE, because the scope is *which table* the row lives in.
-        The markdown backend has the same shape (copy, then delete) and the same exposure, so a
-        failure between them is reported rather than hidden.
+        Two steps rather than one UPDATE, because the scope is *which table* the row lives in —
+        and they are two transactions, since every op opens its own connection. A failure between
+        them therefore leaves the entry live in **both** scopes and raises nothing: the exposure is
+        the same one the markdown backend's copy-then-delete carries, and it is inherited rather
+        than reported. A caller that needs to know should read both scopes after a move.
         """
         if from_scope is to_scope:
             raise ValueError(f"move: {from_scope.value} to itself is not a move")
@@ -409,6 +424,10 @@ class RecordProjectRepository:
         self, *, project: str, scope: ContextScope, agent: str | None
     ) -> list[ContextEntry]:
         table = "memory_record" if scope is ContextScope.private else "shared_record"
+        # `deleted_date` is the only lifecycle this backend writes or reads. Hermod has no archive
+        # op, so it takes no view on `archived_date`: a row archived through the memory store's own
+        # tool stays visible here, where the memory store would hide it. The two servers disagree
+        # about what "live" means, in one direction, on rows nothing archives today.
         where = [
             "user_id = %s",
             "record_type = %s",
@@ -441,7 +460,7 @@ class RecordProjectRepository:
         params: list[object] = [self._user_id, RECORD_TYPE, project, theme]
         if scope is ContextScope.private:
             where.append("agent_id = %s")
-            params.append(agent)
+            params.append(self._require_agent(agent))
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT * FROM {table} WHERE {' AND '.join(where)}", params)
             return cur.fetchone()

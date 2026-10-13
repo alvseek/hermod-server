@@ -4,10 +4,12 @@ A project-context entry is a `knowledge` record carrying a `project`, the privat
 agent-scoped, and the map is a `shared_record` row. It supersedes `test_store_backends.py`, which
 covered the store Hermod no longer owns and is deleted with it.
 
-**PostgreSQL only, because PostgreSQL is the only engine deployed.** Hermod has no local serving
-shape, so a SQLite branch would be a second implementation of this contract that nothing runs and
-nothing would notice drifting. The suite skips without `HERMOD_PG_TEST_URL`, and CI sets it from a
-service container, so the contract runs on every push against the engine that ships.
+**PostgreSQL only, because PostgreSQL is the only engine deployed.** The store has no local shape —
+a verified token names the tenant a call may touch, so with no issuer every store op raises rather
+than answering under a guessed account — which means the only store Hermod ever reads is the
+deployed one. A SQLite branch would be a second implementation of this contract that nothing runs
+and nothing would notice drifting. The suite skips without `HERMOD_PG_TEST_URL`, and CI sets it from
+a service container, so the contract runs on every push against the engine that ships.
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ from hermod.business_services.context_service import MAX_ENTRY_LINES, ContextSer
 from hermod.content.loader import ContentLoader, ContentSource
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
 from hermod.data_repositories.record_project_repository import (
+    _MEMORY_INSERT,
+    _SHARED_INSERT,
     MAP_TITLE,
     RECORD_TYPE,
     RecordProjectRepository,
@@ -348,3 +352,58 @@ async def test_reads_need_no_overlay_checkout_and_writes_say_why_they_do(store) 
                     "template_version": "anything",
                 },
             )
+
+
+# --- the schema copy, pinned to the code rather than trusted -------------------------
+
+#: Columns the code names outside its insert lists: in a `WHERE`, a `SET`, or when mapping a row.
+#: `archived_date` is deliberately absent, because nothing here reads or writes it — Hermod has no
+#: archive op, and its reads treat the tombstone as the only lifecycle.
+_READ_BY_NAME = (
+    "id",
+    "user_id",
+    "record_type",
+    "project",
+    "title",
+    "tags",
+    "created_date",
+    "modified_date",
+    "deleted_date",
+    "full_content",
+    "content_summary",
+)
+
+
+def _columns_of(store: RecordProjectRepository, table: str) -> set[str]:
+    with store._conn() as conn, conn.cursor() as cur:  # noqa: SLF001 — the fixture is the seam
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = %s", (table,)
+        )
+        return {row["column_name"] for row in cur.fetchall()}
+
+
+@pytest.mark.parametrize(
+    ("table", "insert"),
+    [
+        ("shared_record", _SHARED_INSERT),
+        ("memory_record", _MEMORY_INSERT),
+    ],
+)
+def test_the_schema_copy_carries_every_column_the_code_names(
+    store: RecordProjectRepository, table: str, insert: tuple[str, ...]
+) -> None:
+    """`tests/valaskjalf_schema.py` is a *copy* of Munnin's DDL, so it is pinned to the code.
+
+    The suite runs against that copy, which means a column it lacks fails every op — but only the
+    ones a test happens to exercise. This asks the question directly instead: every column the code
+    inserts into, filters on or maps out of must exist in the table it names. A rename landing in
+    the code and not in the copy therefore fails here rather than in a deployment.
+
+    The other direction — the copy carrying a column Munnin's real schema does not have — is not
+    checkable from this repo, because Munnin's DDL lives in `agent-memory-server`. The copy is
+    allowed to be wider than what this server uses; it must not be narrower.
+    """
+    present = _columns_of(store, table)
+    named = set(insert) | set(_READ_BY_NAME) | ({"agent_id"} if table == "memory_record" else set())
+    missing = named - present
+    assert not missing, f"{table} lacks {sorted(missing)}, which the code names"

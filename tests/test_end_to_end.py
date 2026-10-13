@@ -35,12 +35,19 @@ def _free_port() -> int:
 def live_server(tmp_path) -> Iterator[str]:
     """A real uvicorn on a loopback port, yielding the MCP URL a client would be given.
 
-    The store is a temp file, not the repo's runtime `data/hermod.db`: a test that writes project
-    context must not leave rows in the store an agent is using.
+    It skips without a database, because the store is PostgreSQL and nothing else (decision 9).
+    It still drives the store *being replaced*, so it does not move to the record repository here:
+    that belongs with the wiring, and converting it now would be thrown away at the deletions in
+    Step 1.2.
     """
+    import os
+
+    url = os.getenv("HERMOD_PG_TEST_URL")
+    if not url:
+        pytest.skip("HERMOD_PG_TEST_URL not set")
     port = _free_port()
     config = uvicorn.Config(
-        build_app(Config(port=port, db_path=tmp_path / "e2e.db")),
+        build_app(Config(port=port, db_url=url)),
         host="127.0.0.1",
         port=port,
         log_level="warning",

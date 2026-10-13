@@ -31,13 +31,19 @@ INIT = {
 MCP_HEADERS = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
 
 
-def _guarded(db: Path, *subjects: str):
-    return build_app(Config(db_path=db), auth=auth_for(*subjects))
+# The store is PostgreSQL and nothing else (decision 9), and `build_app` refuses a config with no
+# DSN. These tests never call a store tool, so the value only has to be present: the repository
+# does not connect until an op runs.
+_UNUSED_STORE = "postgresql://unused:unused@localhost:5432/unused"
 
 
-def _local(db: Path):
-    """The laptop shape: no issuer configured, so ``build_auth`` returns nothing to guard with."""
-    config = Config(db_path=db)
+def _guarded(_db: Path, *subjects: str):
+    return build_app(Config(db_url=_UNUSED_STORE), auth=auth_for(*subjects))
+
+
+def _local(_db: Path):
+    """The unguarded shape, kept for the negative control below: no issuer, so no guard to prove."""
+    config = Config(db_url=_UNUSED_STORE)
     assert build_auth(config) is None, "the defaults must stay local, or this control is invalid"
     return build_app(config)
 
@@ -141,7 +147,7 @@ def test_the_metadata_document_is_served_from_the_root(tmp_path: Path) -> None:
     """
     app = build_app(
         Config(
-            db_path=tmp_path / "h.db",
+            db_url=_UNUSED_STORE,
             logto_endpoint="https://auth.lok.quest",
             public_base_url="https://hermod.lok.quest",
         )

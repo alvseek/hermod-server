@@ -7,6 +7,24 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The store is PostgreSQL and nothing else, so the contract needs a real one to run against.
+    # Without this service every store test skips, and a suite that passes by omission is worse
+    # than one that fails: this job would go green while the store layer was broken.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: valaskjalf_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HERMOD_PG_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/valaskjalf_test
     steps:
       - uses: actions/checkout@v7
         with:

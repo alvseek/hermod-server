@@ -37,7 +37,6 @@ from hermod.configuration.config import Config, load_config
 from hermod.content.loader import ContentLoader, ContentSource
 from hermod.data_repositories.postgres_project_repository import PostgresProjectRepository
 from hermod.data_repositories.project_repository import ProjectRepository
-from hermod.data_repositories.sqlite_project_repository import SqliteProjectRepository
 
 #: Where the MCP face is mounted, and therefore the address a client connects to.
 MCP_MOUNT_PATH = "/mcp"
@@ -260,13 +259,11 @@ def validate_backend(config: Config) -> None:
     deployment at a local file it never meant to use, and a missing DSN would leave a Postgres
     deployment with no store at all. Mirrors Munnin's own check.
     """
-    if config.db_backend not in {"sqlite", "postgres"}:
+    if not config.db_url:
         raise StoreBackendError(
-            f"HERMOD_DB_BACKEND={config.db_backend!r} is not 'sqlite' or 'postgres'."
-        )
-    if config.db_backend == "postgres" and not config.db_url:
-        raise StoreBackendError(
-            "HERMOD_DB_BACKEND=postgres requires HERMOD_DB_URL (a PostgreSQL DSN)."
+            "HERMOD_DB_URL is not set, so the store has no database. Hermod's project memory "
+            "lives in Valaskjalf's records (ADR-027), and there is no second engine to fall back "
+            "to: SQLite was removed with decision 9."
         )
 
 
@@ -277,9 +274,7 @@ def build_project_repository(config: Config) -> ProjectRepository:
     instance the memory store lives on. Nothing above this line knows which is in play, which is
     the whole point of the seam.
     """
-    if config.db_backend == "postgres":
-        return PostgresProjectRepository(config.db_url)
-    return SqliteProjectRepository(config.db_path)
+    return PostgresProjectRepository(config.db_url)
 
 
 async def health(request: Request) -> JSONResponse:

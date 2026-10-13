@@ -24,7 +24,10 @@ def test_defaults_are_loopback_and_local() -> None:
     assert config.content_root == Path("agent-memory-project")
     # The store's backend document, not markdown's: a served client has no local store.
     assert config.backend_doc == "storage-backends/db.md"
-    assert config.db_path == Path("data/hermod.db")
+    # One engine, and it is the deployed one: no local file, no backend switch (decision 9).
+    assert config.db_url == ""
+    assert "db_path" not in Config.__dataclass_fields__
+    assert "db_backend" not in Config.__dataclass_fields__
 
 
 def test_no_issuer_by_default_and_no_mode_switch() -> None:
@@ -49,6 +52,7 @@ def test_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("HERMOD_BACKEND_DOC", "storage-backends/markdown.md")
     monkeypatch.setenv("HERMOD_LOGTO_ENDPOINT", "https://auth.lok.quest")
     monkeypatch.setenv("HERMOD_PUBLIC_BASE_URL", "https://hermod.lok.quest")
+    monkeypatch.setenv("HERMOD_DB_URL", "postgresql://u:p@munnin-postgres:5432/hermod")
     monkeypatch.setenv(
         "HERMOD_LOGTO_AUDIENCE",
         "https://hermod.lok.quest/mcp, https://hermod.lok.quest/mcp/ ,",
@@ -59,6 +63,7 @@ def test_env_overrides(monkeypatch) -> None:
     assert config.backend_doc == "storage-backends/markdown.md"
     assert config.logto_endpoint == "https://auth.lok.quest"
     assert config.public_base_url == "https://hermod.lok.quest"
+    assert config.db_url == "postgresql://u:p@munnin-postgres:5432/hermod"
     # Comma-separated, trimmed, and empty entries dropped: the deploy writes a trailing comma.
     assert config.logto_audience == (
         "https://hermod.lok.quest/mcp",

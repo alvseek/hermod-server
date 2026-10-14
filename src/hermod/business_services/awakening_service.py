@@ -30,11 +30,11 @@ class AwakeningService:
         """The payload for one coding awakening.
 
         ``projects`` is the resolved project plus the repositories related to it, and **the first
-        element is the session's repository**: the project context and the orientation map come
-        from that one, while the episodes and the map list span the whole set, because the set
-        widens the recall rather than moving the session. A set whose first element is a related
-        repository therefore answers about that one instead, which is why the convention is stated
-        here rather than left to be inferred.
+        element is the session's repository**. That element is the session's home, not a filter:
+        every list the payload carries spans the whole set, because the set widens the recall
+        rather than moving the session. A set whose first element is a related repository therefore
+        names that one as the home, which is why the convention is stated here rather than left to
+        be inferred.
 
         ``domain`` is not validated: it is the domain Munnin's ``awaken`` answered for a moment
         earlier, so an agent that does not exist has already failed one call, and a second check

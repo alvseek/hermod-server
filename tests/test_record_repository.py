@@ -496,6 +496,35 @@ def test_the_coding_lane_is_read_whole_and_retired_rows_are_not(store) -> None:
     assert lane[0].full_content.startswith("# A pattern")
 
 
+# --- the payload's set, across both servers' rows -------------------------------------
+
+
+def test_the_payload_spans_the_set_for_context_and_maps(store) -> None:
+    """`projects[0]` is the session's *home*, and never a filter on what comes back.
+
+    The tool's docstring and the service's both used to say the context index and the maps came
+    from the first element alone, which tells a caller to fetch a related repository's index
+    separately and defeats the one call the composite exists for. Seeding two repositories and
+    asserting both is what keeps the prose and the loop from drifting apart again: drop either
+    loop in ``AwakeningService.awaken`` and the second repository's rows disappear here.
+    """
+    store.create_context_entry(
+        ContextEntry(project="home", scope=ContextScope.shared, theme="h", full_content="# h\n")
+    )
+    store.create_context_entry(
+        ContextEntry(project="sub", scope=ContextScope.shared, theme="s", full_content="# s\n")
+    )
+    store.create_map(OrientationMap(project="home", full_content="# Map\n\nhome\n"))
+
+    payload = AwakeningService(lambda: store).awaken(domain=AGENT, projects=["home", "sub"])
+
+    assert [(row["project"], row["theme"]) for row in payload["context_index"]] == [
+        ("home", "h"),
+        ("sub", "s"),
+    ]
+    assert [row["project"] for row in payload["maps"]] == ["home"]
+
+
 # --- the schema copy, pinned to the code rather than trusted -------------------------
 
 #: Columns the code names outside its insert lists: in a `WHERE`, a `SET`, or when mapping a row.

@@ -129,9 +129,9 @@ def _register_awakening(mcp: FastMCP, awakening: AwakeningService) -> None:
         with Munnin's ``awaken``; together the two are the whole awakening.
 
         ``projects`` is the session's own repository **first**, then the repositories related to
-        it: the context index and the maps come from the first, while the episodes span them all,
-        because the related set widens the recall rather than moving the session. A reordered list
-        answers about a different repository.
+        it. That first element is the session's home, not a filter: every part of the payload spans
+        the whole set, because the related set widens the recall rather than moving the session. A
+        reordered list makes a different repository the session's home.
         """
         return awakening.awaken(domain=domain, projects=projects)
 

@@ -112,6 +112,7 @@ def _index_row(entry: EpisodeIndexEntry) -> dict[str, object]:
     return {
         "uuid": entry.uuid,
         "title": entry.title,
+        "content_summary": entry.content_summary,
         "project": entry.project,
         "tags": list(entry.tags),
         "created_date": entry.created_date,

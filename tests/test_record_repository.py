@@ -376,6 +376,7 @@ def _row(
     created: str = "2026-01-01T00:00:00+00:00",
     archived: str | None = None,
     deleted: str | None = None,
+    summary: str | None = None,
 ) -> None:
     """Seed one record the way Munnin would have written it.
 
@@ -389,7 +390,7 @@ def _row(
     ]
     values: list[object] = [
         f"uuid-{table}-{title}", USER, record_type, project, title, "[]",
-        created, created, archived, deleted, f"# {title}\n\nbody of {title}\n", None,
+        created, created, archived, deleted, f"# {title}\n\nbody of {title}\n", summary,
     ]
     if table == "memory_record":
         columns.insert(2, "agent_id")
@@ -458,7 +459,7 @@ def test_the_episode_index_spans_the_set_and_carries_no_bodies(store) -> None:
     _row(store, table="memory_record", record_type=EPISODE_TYPE, title="one older", project="one",
          created="2026-01-01T00:00:00+00:00")
     _row(store, table="memory_record", record_type=EPISODE_TYPE, title="one newer", project="one",
-         created="2026-01-02T00:00:00+00:00")
+         created="2026-01-02T00:00:00+00:00", summary="what the newer session did")
     _row(store, table="memory_record", record_type=EPISODE_TYPE, title="two", project="two",
          created="2026-01-03T00:00:00+00:00")
     _row(store, table="memory_record", record_type=EPISODE_TYPE, title="outside", project="three",
@@ -470,6 +471,8 @@ def test_the_episode_index_spans_the_set_and_carries_no_bodies(store) -> None:
 
     assert [e.title for e in index] == ["two", "one newer", "one older"]
     assert [e.project for e in index] == ["two", "one", "one"]
+    # the one-liner rides the index, so a reader can choose an episode without a `get`
+    assert [e.content_summary for e in index] == [None, "what the newer session did", None]
     # the projection is the point: a body is what this read exists to avoid carrying
     assert not hasattr(index[0], "full_content")
     assert store.episode_index(agent=AGENT, projects=[]) == []

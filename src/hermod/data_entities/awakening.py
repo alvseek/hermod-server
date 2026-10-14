@@ -41,15 +41,16 @@ class Episode:
 class EpisodeIndexEntry:
     """One line of the episodic index: enough to choose an episode, and no body.
 
-    The same projection Munnin's own index carries — ``uuid``, title, project and dates — so a
-    caller that holds either index selects from it the same way, and a body it does not carry is
-    one ``get`` away."""
+    The same projection Munnin's own index carries — ``uuid``, title, content summary, project
+    and dates — so a caller that holds either index selects from it the same way, and a body it
+    does not carry is one ``get`` away."""
 
     uuid: str
     title: str
     created_date: str | None = None
     modified_date: str | None = None
     project: str | None = None
+    content_summary: str | None = None
     tags: list[str] = field(default_factory=list)
 
 

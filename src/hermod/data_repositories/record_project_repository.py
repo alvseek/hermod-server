@@ -486,7 +486,7 @@ class RecordProjectRepository:
             return []
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT uuid, title, project, tags, created_date, modified_date "
+                "SELECT uuid, title, content_summary, project, tags, created_date, modified_date "
                 "FROM memory_record WHERE user_id = %s AND agent_id = %s AND record_type = %s "
                 "AND project = ANY(%s) AND deleted_date IS NULL AND archived_date IS NULL "
                 "ORDER BY created_date DESC, id DESC",
@@ -597,6 +597,7 @@ def _row_to_index_entry(row: dict) -> EpisodeIndexEntry:
     return EpisodeIndexEntry(
         uuid=row["uuid"],
         title=row["title"],
+        content_summary=row["content_summary"],
         project=row["project"],
         tags=json.loads(row["tags"]) if row["tags"] else [],
         created_date=row["created_date"],

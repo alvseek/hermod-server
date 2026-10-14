@@ -153,13 +153,13 @@ def test_import_writes_entries_and_the_map(tmp_path: Path, store) -> None:
     assert entry.full_content.startswith("---\nproject:")
     assert "The body." in entry.full_content
     # And the columns are a projection of that same frontmatter.
-    assert entry.description == "what alpha is"
+    assert entry.content_summary == "what alpha is"
     assert entry.tags == ["alpha", "beta"]
     assert entry.created_date == "2026-01-02"
 
     orientation_map = repo.get_map(project="proj-a")
     assert orientation_map is not None
-    assert orientation_map.description == "the map for proj-a"
+    assert orientation_map.content_summary == "the map for proj-a"
     assert orientation_map.modified_date == "2026-02-02"
 
 
@@ -169,7 +169,7 @@ def test_an_entry_with_no_frontmatter_still_imports(tmp_path: Path, store) -> No
 
     entry = repo.get_context_entry(project="proj-b", scope=ContextScope.shared, theme="gamma")
     assert entry is not None
-    assert entry.description is None
+    assert entry.content_summary is None
     assert entry.tags == []
     assert entry.full_content.startswith("# Gamma")
 

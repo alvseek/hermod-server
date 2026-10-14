@@ -105,7 +105,7 @@ class ContextService:
         theme: str,
         content: str,
         template_version: str,
-        description: str | None = None,
+        content_summary: str | None = None,
         tags: Sequence[str] | None = None,
         agent: str | None = None,
     ) -> ContextEntry:
@@ -123,7 +123,7 @@ class ContextService:
                 scope=scope,
                 theme=theme,
                 full_content=content,
-                description=description,
+                content_summary=content_summary,
                 tags=list(tags or []),
             ),
             agent=agent,
@@ -137,17 +137,17 @@ class ContextService:
         theme: str,
         content: str,
         template_version: str,
-        description: str | None = None,
+        content_summary: str | None = None,
         tags: Sequence[str] | None = None,
         agent: str | None = None,
     ) -> ContextEntry:
-        """Replace a live entry's body, description and tags. Refuses an oversized body, and a
-        missing or stale template stamp — it restates the whole document, so it carries the same
-        gate the create does.
+        """Replace a live entry's body, ``content_summary`` and ``tags``. Refuses an oversized
+        body, and a missing or stale template stamp — it restates the whole document, so it
+        carries the same gate the create does.
 
         A wholesale replace, matching the markdown backend's write-back of the whole entry:
-        an omitted ``description`` or ``tags`` clears it rather than preserving the stored value.
-        ``agent`` is required for the private scope, as it is all the way down.
+        an omitted ``content_summary`` or ``tags`` clears it rather than preserving the stored
+        value. ``agent`` is required for the private scope, as it is all the way down.
         """
         self._refuse_oversized(content)
         self._refuse_stale_template(_ENTRY_TEMPLATE, template_version)
@@ -157,7 +157,7 @@ class ContextService:
                 scope=scope,
                 theme=theme,
                 full_content=content,
-                description=description,
+                content_summary=content_summary,
                 tags=list(tags or []),
             ),
             agent=agent,
@@ -255,13 +255,13 @@ class ContextService:
         project: str,
         content: str,
         template_version: str,
-        description: str | None = None,
+        content_summary: str | None = None,
     ) -> OrientationMap:
         """Insert the project's map. The served ``§ create-map``; refuses a second map, and a
         missing or stale template stamp."""
         self._refuse_stale_template(_MAP_TEMPLATE, template_version)
         return self._repo().create_map(
-            OrientationMap(project=project, full_content=content, description=description)
+            OrientationMap(project=project, full_content=content, content_summary=content_summary)
         )
 
     def write_map(
@@ -270,11 +270,11 @@ class ContextService:
         project: str,
         content: str,
         template_version: str,
-        description: str | None = None,
+        content_summary: str | None = None,
     ) -> OrientationMap:
         """Rewrite the project's map. The served ``§ write-map``; refuses a missing or stale
         template stamp, since it restates the whole document."""
         self._refuse_stale_template(_MAP_TEMPLATE, template_version)
         return self._repo().write_map(
-            OrientationMap(project=project, full_content=content, description=description)
+            OrientationMap(project=project, full_content=content, content_summary=content_summary)
         )

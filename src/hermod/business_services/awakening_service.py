@@ -126,7 +126,7 @@ def _context_row(entry: ContextEntry) -> dict[str, object]:
         "project": entry.project,
         "scope": entry.scope.value,
         "theme": entry.theme,
-        "description": entry.description,
+        "content_summary": entry.content_summary,
         "tags": list(entry.tags),
         "created_date": entry.created_date,
         "modified_date": entry.modified_date,
@@ -137,7 +137,7 @@ def _map_row(found: OrientationMap) -> dict[str, object]:
     """The map whole, dates included: the bare ``/map-orientation`` load does an mtime check."""
     return {
         "project": found.project,
-        "description": found.description,
+        "content_summary": found.content_summary,
         "created_date": found.created_date,
         "modified_date": found.modified_date,
         "content": found.full_content,

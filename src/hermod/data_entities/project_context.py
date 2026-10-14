@@ -5,8 +5,8 @@ Two tables, two shapes:
 ``ContextEntry``
     One project-context entry, addressed by ``(project, scope, theme)``. ``theme`` is the
     markdown backend's filename stem, so an entry keeps its identity when it moves between
-    scopes and only ``scope`` changes. ``description`` and ``tags`` are the frontmatter the
-    context index line renders; ``full_content`` is the whole document.
+    scopes and only ``scope`` changes. ``content_summary`` and ``tags`` are the one-line
+    summary and the tags the frontmatter carries; ``full_content`` is the whole document.
 ``OrientationMap``
     The project's orientation map, one per project, stored whole — the file the markdown
     backend would have written, frontmatter included.
@@ -42,7 +42,7 @@ class ContextEntry:
     theme: str
     full_content: str
     id: int | None = None
-    description: str | None = None
+    content_summary: str | None = None
     tags: list[str] = field(default_factory=list)
     created_date: str | None = None
     modified_date: str | None = None
@@ -60,6 +60,6 @@ class OrientationMap:
     project: str
     full_content: str
     id: int | None = None
-    description: str | None = None
+    content_summary: str | None = None
     created_date: str | None = None
     modified_date: str | None = None

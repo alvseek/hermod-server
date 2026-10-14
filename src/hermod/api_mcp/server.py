@@ -299,7 +299,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             "project": entry.project,
             "scope": entry.scope.value,
             "theme": entry.theme,
-            "description": entry.description,
+            "content_summary": entry.content_summary,
             "tags": entry.tags,
             "created_date": entry.created_date,
             "modified_date": entry.modified_date,
@@ -347,7 +347,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         theme: str,
         content: str,
         template_version: str,
-        description: str | None = None,
+        content_summary: str | None = None,
         tags: list[str] | None = None,
         agent: str | None = None,
     ) -> dict[str, Any]:
@@ -355,9 +355,10 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
 
         Read `project-context-template` first and pass the `template_version` stamp it carries: it
         is a gate, not content, and no stored entry carries it. `content` is the whole document,
-        frontmatter included, minus that stamp. `description` and `tags` are the frontmatter the
-        context index shows, so pass them and the listing can tell entries apart. Refuses an entry
-        over the line cap, a missing or stale stamp, and an identity that is already taken.
+        frontmatter included, minus that stamp. `content_summary` is the one-line summary that
+        frontmatter carries as `description`, and `tags` is its tag list: pass both, so the listing
+        can tell entries apart. Refuses an entry over the line cap, a missing or stale stamp, and an
+        identity that is already taken.
         """
         entry = service.create_context_entry(
             project=project,
@@ -365,7 +366,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             theme=theme,
             content=content,
             template_version=template_version,
-            description=description,
+            content_summary=content_summary,
             tags=tags,
             agent=agent,
         )
@@ -378,15 +379,15 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         theme: str,
         content: str,
         template_version: str,
-        description: str | None = None,
+        content_summary: str | None = None,
         tags: list[str] | None = None,
         agent: str | None = None,
     ) -> dict[str, Any]:
-        """Replace a live context entry: its content, description and tags.
+        """Replace a live context entry: its content, summary and tags.
 
         Read `project-context-template` first and pass its `template_version` stamp, exactly as the
         create does: an update restates the whole document. A **wholesale replace**, exactly as the
-        markdown backend's write-back is: `description` and `tags` default to empty, so a caller
+        markdown backend's write-back is: `content_summary` and `tags` default to empty, so a caller
         that passes only `content` clears them. The entry must already exist, which is what keeps
         an update from quietly becoming a create.
         """
@@ -396,7 +397,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             theme=theme,
             content=content,
             template_version=template_version,
-            description=description,
+            content_summary=content_summary,
             tags=tags,
             agent=agent,
         )
@@ -459,7 +460,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         return {
             "found": True,
             "project": orientation_map.project,
-            "description": orientation_map.description,
+            "content_summary": orientation_map.content_summary,
             "content": orientation_map.full_content,
             "created_date": orientation_map.created_date,
             "modified_date": orientation_map.modified_date,
@@ -467,7 +468,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
 
     @mcp.tool(title="Create the orientation map", annotations=_WRITE)
     def create_map(
-        project: str, content: str, template_version: str, description: str | None = None
+        project: str, content: str, template_version: str, content_summary: str | None = None
     ) -> dict[str, Any]:
         """Create the project's orientation map, from the orientation-map template.
 
@@ -479,13 +480,13 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             project=project,
             content=content,
             template_version=template_version,
-            description=description,
+            content_summary=content_summary,
         )
         return {"project": orientation_map.project, "created_date": orientation_map.created_date}
 
     @mcp.tool(title="Write the orientation map", annotations=_WRITE)
     def write_map(
-        project: str, content: str, template_version: str, description: str | None = None
+        project: str, content: str, template_version: str, content_summary: str | None = None
     ) -> dict[str, Any]:
         """Rewrite the project's orientation map wholesale.
 
@@ -495,6 +496,6 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             project=project,
             content=content,
             template_version=template_version,
-            description=description,
+            content_summary=content_summary,
         )
         return {"project": orientation_map.project, "modified_date": orientation_map.modified_date}

@@ -70,9 +70,9 @@ class ProjectRepository(Protocol):
     def update_context_entry(
         self, entry: ContextEntry, *, agent: str | None = None
     ) -> ContextEntry:
-        """Replace a live entry's body, description and tags. Bumps ``modified_date`` and
-        preserves ``created_date``. Raises ``LookupError`` if no live entry holds the
-        identity. ``agent`` is required for the private scope."""
+        """Replace a live entry's body, ``content_summary`` and ``tags``. Bumps
+        ``modified_date`` and preserves ``created_date``. Raises ``LookupError`` if no live
+        entry holds the identity. ``agent`` is required for the private scope."""
         ...
 
     def move_context_entry(

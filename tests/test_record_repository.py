@@ -73,7 +73,7 @@ def _entry(theme: str, *, scope: ContextScope = ContextScope.shared, **fields) -
 
 def test_a_shared_entry_is_a_knowledge_record_carrying_the_project(store) -> None:
     """The shape ADR-027 turns on, asserted against the table rather than the interface."""
-    created = store.create_context_entry(_entry("build", description="how it is built"))
+    created = store.create_context_entry(_entry("build", content_summary="how it is built"))
     identity = entry_uuid(user_id=USER, project=PROJECT, scope=ContextScope.shared, theme="build")
     with store._conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -110,14 +110,14 @@ def test_a_private_entry_lives_in_the_agent_scoped_table(store) -> None:
 
 def test_an_entry_round_trips_with_every_field(store) -> None:
     created = store.create_context_entry(
-        _entry("build", description="how it is built", tags=["docker", "kamal"])
+        _entry("build", content_summary="how it is built", tags=["docker", "kamal"])
     )
     assert created.created_date and created.modified_date
 
     read = store.get_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
     assert read is not None
     assert read.full_content == created.full_content
-    assert read.description == "how it is built"
+    assert read.content_summary == "how it is built"
     assert read.tags == ["docker", "kamal"]
 
 
@@ -165,13 +165,13 @@ def test_update_replaces_body_summary_and_tags(store) -> None:
             scope=ContextScope.shared,
             theme="build",
             full_content="# build\n\nrewritten\n",
-            description="new summary",
+            content_summary="new summary",
             tags=["x"],
         )
     )
     assert updated.created_date == created.created_date
     assert updated.full_content == "# build\n\nrewritten\n"
-    assert updated.description == "new summary"
+    assert updated.content_summary == "new summary"
     assert updated.tags == ["x"]
 
 
@@ -253,7 +253,7 @@ def test_a_project_starts_with_no_map(store) -> None:
 
 def test_the_map_is_created_once_and_rewritten_after(store) -> None:
     created = store.create_map(
-        OrientationMap(project=PROJECT, full_content="# Map\n\nfirst\n", description="the map")
+        OrientationMap(project=PROJECT, full_content="# Map\n\nfirst\n", content_summary="the map")
     )
     with store._conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -270,10 +270,12 @@ def test_the_map_is_created_once_and_rewritten_after(store) -> None:
         store.create_map(OrientationMap(project=PROJECT, full_content="# Map\n\nsecond\n"))
 
     written = store.write_map(
-        OrientationMap(project=PROJECT, full_content="# Map\n\nsecond\n", description="rewritten")
+        OrientationMap(
+            project=PROJECT, full_content="# Map\n\nsecond\n", content_summary="rewritten"
+        )
     )
     assert written.full_content == "# Map\n\nsecond\n"
-    assert store.get_map(project=PROJECT).description == "rewritten"
+    assert store.get_map(project=PROJECT).content_summary == "rewritten"
 
 
 def test_writing_a_map_that_does_not_exist_is_a_lookup_error(store) -> None:

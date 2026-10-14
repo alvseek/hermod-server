@@ -141,12 +141,13 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
                     "theme": "hermod-server-build",
                     "content": "# Hermod Server Build\n\nWhat the build left behind.\n",
                     "template_version": stamp,
-                    "description": "the hermod-server build",
+                    "content_summary": "the hermod-server build",
                     "tags": ["hermod-server"],
                 },
             )
         ).data
         assert created["scope"] == "private"
+        assert created["content_summary"] == "the hermod-server build"
 
         listed = (
             await client.call_tool(
@@ -171,6 +172,7 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
         assert read["found"] is True
         assert read["scope"] == "private"
         assert read["content"].startswith("# Hermod Server Build")
+        assert read["content_summary"] == "the hermod-server build"
 
         # The other scope is untouched: the entry is addressed, not searched for.
         assert (

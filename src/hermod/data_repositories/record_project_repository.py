@@ -197,10 +197,10 @@ class RecordProjectRepository:
         columns = _MEMORY_INSERT if private else _SHARED_INSERT
         values: tuple[object, ...] = (
             (identity, self._user_id, owner, RECORD_TYPE, entry.project, entry.theme, tags,
-             created, modified, None, None, entry.full_content, entry.description)
+             created, modified, None, None, entry.full_content, entry.content_summary)
             if private
             else (identity, self._user_id, RECORD_TYPE, entry.project, entry.theme, tags,
-                  created, modified, None, None, entry.full_content, entry.description)
+                  created, modified, None, None, entry.full_content, entry.content_summary)
         )
         with self._conn() as conn, conn.cursor() as cur:
             # Existence first, so the ordinary paths never raise: a duplicate raises nothing, and
@@ -219,7 +219,7 @@ class RecordProjectRepository:
                     "modified_date = %s, deleted_date = NULL WHERE uuid = %s",
                     (
                         entry.full_content,
-                        entry.description,
+                        entry.content_summary,
                         json.dumps(entry.tags or []),
                         modified,
                         identity,
@@ -271,7 +271,7 @@ class RecordProjectRepository:
                 "modified_date = %s WHERE uuid = %s AND user_id = %s AND deleted_date IS NULL",
                 (
                     entry.full_content,
-                    entry.description,
+                    entry.content_summary,
                     json.dumps(entry.tags or []),
                     _now(),
                     identity,
@@ -330,7 +330,7 @@ class RecordProjectRepository:
                 scope=to_scope,
                 theme=theme,
                 full_content=moved.full_content,
-                description=moved.description,
+                content_summary=moved.content_summary,
                 tags=list(moved.tags),
                 created_date=moved.created_date,
                 modified_date=_now(),
@@ -390,7 +390,7 @@ class RecordProjectRepository:
                     (
                         identity, self._user_id, RECORD_TYPE, orientation_map.project, MAP_TITLE,
                         json.dumps([]), created, modified, None, None,
-                        orientation_map.full_content, orientation_map.description,
+                        orientation_map.full_content, orientation_map.content_summary,
                     ),
                 )
             except psycopg.errors.UniqueViolation as exc:
@@ -411,7 +411,7 @@ class RecordProjectRepository:
                 "modified_date = %s WHERE uuid = %s AND user_id = %s AND deleted_date IS NULL",
                 (
                     orientation_map.full_content,
-                    orientation_map.description,
+                    orientation_map.content_summary,
                     _now(),
                     identity,
                     self._user_id,
@@ -549,7 +549,7 @@ def _row_to_entry(row: dict) -> ContextEntry:
         project=row["project"],
         scope=ContextScope.private if "agent_id" in row else ContextScope.shared,
         theme=row["title"],
-        description=row["content_summary"],
+        content_summary=row["content_summary"],
         tags=json.loads(row["tags"]) if row["tags"] else [],
         created_date=row["created_date"],
         modified_date=row["modified_date"],
@@ -562,7 +562,7 @@ def _row_to_map(row: dict) -> OrientationMap:
     return OrientationMap(
         id=row["id"],
         project=row["project"],
-        description=row["content_summary"],
+        content_summary=row["content_summary"],
         created_date=row["created_date"],
         modified_date=row["modified_date"],
         full_content=row["full_content"],

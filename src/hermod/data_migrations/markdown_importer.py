@@ -180,7 +180,7 @@ def parse_entry(source: EntrySource) -> ContextEntry:
         scope=source.scope,
         theme=source.path.stem,
         full_content=text,
-        description=str(description) if description else None,
+        content_summary=str(description) if description else None,
         tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],
         created_date=created,
         modified_date=modified,
@@ -196,7 +196,7 @@ def parse_map(source: MapSource) -> OrientationMap:
     return OrientationMap(
         project=source.project,
         full_content=text,
-        description=str(description) if description else None,
+        content_summary=str(description) if description else None,
         created_date=created,
         modified_date=modified,
     )

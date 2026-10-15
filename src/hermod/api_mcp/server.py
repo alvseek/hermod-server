@@ -43,8 +43,10 @@ INSTRUCTIONS = (
     "push/pull.\n"
     'Start with read_procedure("awaken-coder") and follow it; help() lists everything served.\n'
     "Project context and the orientation map are the memory store's records, scoped by project; "
-    "the store tools read and write them.\n"
-    "Agent memory is Munnin's, not this server's: a coding client connects both.\n"
+    "the store tools create them and list them.\n"
+    "A context entry is one of Munnin's records, so reading or editing one goes through Munnin's "
+    "own ops, by the uuid a listing returned; agent memory is Munnin's too: a coding client "
+    "connects both.\n"
     "Procedures come from read_procedure(name), never from slash commands."
 )
 
@@ -303,9 +305,9 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         """List a project's shared context entries, the cross-agent half of its context index.
 
         Each row carries its `uuid`, and that uuid is how the entry is addressed from then on: a
-        body comes from the memory layer's `get(uuid)`, is changed with its `edit` family, has its
-        summary and tags set with its `edit_metadata`, and is retired with its `soft_delete`. A
-        row with either lifecycle flag set is retired, so it is absent here.
+        body comes from Munnin's `get(uuid)`, is changed with its `edit` family, has its summary
+        and tags set with its `edit_metadata`, and is retired with its `soft_delete`. A row with
+        either lifecycle flag set is retired, so it is absent here.
         """
         return [_entry(entry) for entry in service.list_shared_context(project=project)]
 
@@ -314,7 +316,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         """List one agent's own context entries for a project.
 
         `agent` is required rather than optional, because those rows are owned: answering without
-        it could only be every agent's rows at once. Each row carries its `uuid`.
+        it could only be every agent's rows at once. Each row carries its `uuid`, which is what
+        Munnin's own ops address it by.
         """
         return [
             _entry(entry)
@@ -337,7 +340,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         reader, while reading and writing are by `uuid` and never by theme. `content` is the whole
         document, frontmatter included, minus that stamp. `content_summary` is required, since it
         is the line a listing shows beside the theme. No theme is checked here, so list first and
-        create only when nothing already covers it.
+        create only when nothing already covers it. Every later read or change of the entry goes
+        through Munnin, by the uuid this returns.
         """
         entry = service.create_shared_context_entry(
             project=project,
@@ -362,7 +366,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         """Create one entry owned by an agent, from the same template and behind the same gates.
 
         `agent` must be a kebab domain the memory store already holds, because the row carries its
-        owner. Everything else matches the shared create.
+        owner. Everything else matches the shared create, including that later reads and changes go
+        through Munnin by the uuid it returns.
         """
         entry = service.create_agent_context_entry(
             project=project,
@@ -383,7 +388,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         source row is tombstoned rather than deleted, the same copy-then-delete shape the markdown
         backend has. Refused when the entry already lives in the shared layer. No theme is checked,
         so a move onto a theme the shared layer already holds leaves two rows on it, exactly as a
-        create would; list the target layer first when that matters.
+        create would; list the target layer first when that matters. Reading or editing its body
+        afterwards goes through Munnin, by the uuid it keeps.
         """
         return _entry(service.promote_context_entry(uuid=uuid))
 
@@ -392,7 +398,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         """Move one shared entry into one agent's layer, body untouched and uuid kept.
 
         The owner is required, because the target row carries `agent_id` and a shared row has none
-        to inherit.
+        to inherit. Reading or editing its body afterwards goes through Munnin, by the uuid it
+        keeps.
         """
         return _entry(service.demote_context_entry(uuid=uuid, agent=agent))
 

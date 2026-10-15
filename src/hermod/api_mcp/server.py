@@ -381,8 +381,9 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
 
         The uuid is kept, so a handle a caller already holds still resolves afterwards, and the
         source row is tombstoned rather than deleted, the same copy-then-delete shape the markdown
-        backend has. Refused when the entry already lives in the shared layer, or when a live
-        shared entry already holds that theme.
+        backend has. Refused when the entry already lives in the shared layer. No theme is checked,
+        so a move onto a theme the shared layer already holds leaves two rows on it, exactly as a
+        create would; list the target layer first when that matters.
         """
         return _entry(service.promote_context_entry(uuid=uuid))
 

@@ -196,7 +196,10 @@ class RecordProjectRepository:
                 )
             except psycopg.errors.ForeignKeyViolation as exc:
                 self._refuse_missing_agent(agent, exc)
-            cur.execute(f"SELECT * FROM {table} WHERE uuid = %s", (identity,))
+            cur.execute(
+                f"SELECT * FROM {table} WHERE uuid = %s AND user_id = %s",
+                (identity, self._user_id),
+            )
             row = cur.fetchone()
         return _row_to_entry(row, scope=entry.scope)
 
@@ -248,16 +251,9 @@ class RecordProjectRepository:
                 )
             project = row["project"]
             theme = row["title"]
-            # The target may not already hold a live row for that theme: moving onto another
-            # entry would leave two rows on one theme by accident, which is the collision the
-            # move sub-flow stops on.
-            if self._theme_holder(
-                cur, project=project, scope=to_scope, theme=theme, agent=agent
-            ) is not None:
-                raise ValueError(
-                    f"cannot move {theme!r} to the {to_scope.value} layer: a live "
-                    f"{to_scope.value} entry already holds that theme in {project!r}"
-                )
+            # No theme check, deliberately: a second row on one theme is an allowed state here, so
+            # a move onto an occupied theme is exactly as acceptable as a create onto one. The
+            # sub-flow's own collision step is what decides whether to call this at all.
             moved = _now()
             columns = _MEMORY_INSERT if to_scope is ContextScope.agent else _SHARED_INSERT
             values: tuple[object, ...] = (
@@ -327,7 +323,8 @@ class RecordProjectRepository:
                 ),
             )
             cur.execute(
-                f"SELECT * FROM {_SHARED_TABLE} WHERE uuid = %s", (identity,)
+                f"SELECT * FROM {_SHARED_TABLE} WHERE uuid = %s AND user_id = %s",
+                (identity, self._user_id),
             )
             row = cur.fetchone()
         return _row_to_map(row)
@@ -356,7 +353,8 @@ class RecordProjectRepository:
                 ),
             )
             cur.execute(
-                f"SELECT * FROM {_SHARED_TABLE} WHERE uuid = %s", (found["uuid"],)
+                f"SELECT * FROM {_SHARED_TABLE} WHERE uuid = %s AND user_id = %s",
+                (found["uuid"], self._user_id),
             )
             row = cur.fetchone()
         return _row_to_map(row)
@@ -463,33 +461,24 @@ class RecordProjectRepository:
         return [_row_to_entry(r, scope=scope) for r in rows]
 
     def _select_map(self, cur: psycopg.Cursor, *, project: str) -> dict | None:
-        """The live map row for one project, or ``None``."""
+        """The live map row for one project, or ``None``.
+
+        More than one live row is a state nothing should produce, and it is named rather than
+        picked from: the map is read by project, so serving one of two arbitrarily would answer
+        about a map the caller did not ask for.
+        """
         cur.execute(
             f"SELECT * FROM {_SHARED_TABLE} WHERE user_id = %s AND record_type = %s "
-            f"AND project = %s AND title = %s AND {_LIVE}",
+            f"AND project = %s AND title = %s AND {_LIVE} ORDER BY id",
             (self._user_id, RECORD_TYPE, project, MAP_TITLE),
         )
-        return cur.fetchone()
-
-    def _theme_holder(
-        self,
-        cur: psycopg.Cursor,
-        *,
-        project: str,
-        scope: ContextScope,
-        theme: str,
-        agent: str | None,
-    ) -> dict | None:
-        """The live row holding one theme in a layer, or ``None``. The move's collision check."""
-        where = ["user_id = %s", "record_type = %s", "project = %s", "title = %s", _LIVE]
-        params: list[object] = [self._user_id, RECORD_TYPE, project, theme]
-        if agent is not None:
-            where.append("agent_id = %s")
-            params.append(agent)
-        cur.execute(
-            f"SELECT * FROM {_table_for(scope)} WHERE {' AND '.join(where)}", params
-        )
-        return cur.fetchone()
+        rows = cur.fetchall()
+        if len(rows) > 1:
+            raise ValueError(
+                f"project {project!r} has {len(rows)} live orientation maps; the store cannot "
+                "tell which one was meant"
+            )
+        return rows[0] if rows else None
 
     def _locate_entry(self, cur: psycopg.Cursor, uuid: str) -> tuple[str, dict] | None:
         """The table and the live row holding one uuid, or ``None``.

@@ -330,8 +330,10 @@ def import_markdown(
             # nothing report success, and this count is what a verification reads.
             report.failed.append(f"{source.path}: {exc}")
         except ValueError:
-            # A store-level refusal other than a missing agent. The run did not write, so the file
-            # counts as skipped, which is what a taken identity used to mean here.
+            # A guard rather than a live branch: no store-level refusal reaches here today beyond a
+            # missing agent, which the branch above takes. It stays because a refusal the store
+            # adds later should count the file as skipped, which is what a taken identity meant
+            # when the store still carried that rule.
             report.entries_skipped += 1
         except Exception as exc:  # noqa: BLE001 — a bad file must not end the run
             report.failed.append(f"{source.path}: {exc}")

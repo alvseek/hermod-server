@@ -69,8 +69,8 @@ class ProjectRepository(Protocol):
         Two steps underneath, because the layer is *which table* the row lives in: the target
         gains the row and the source is tombstoned, the same shape the markdown backend's
         copy-then-delete carries. Raises ``LookupError`` when no live entry holds the uuid, and
-        ``ValueError`` when it is already in the target layer or when the target already holds
-        that theme."""
+        ``ValueError`` when it is already in the target layer. It checks no theme: two rows may
+        carry one, so the flow's own collision step decides whether a move should happen."""
         ...
 
     def demote_context_entry(self, *, uuid: str, agent: str) -> ContextEntry:

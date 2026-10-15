@@ -205,13 +205,43 @@ def test_a_direction_change_refuses_a_row_already_in_the_target_layer(store) -> 
         store.promote_context_entry(uuid=created.uuid)
 
 
-def test_a_direction_change_onto_an_occupied_theme_is_refused(store) -> None:
+def test_a_direction_change_onto_an_occupied_theme_is_allowed(store) -> None:
+    """No theme check, by decision: a second row on one theme is an accepted state.
+
+    The move sub-flow's own collision step decides whether a move is called at all, so the store
+    does not refuse one here where a create with the same effect would be allowed.
+    """
     agent_side = store.create_agent_context_entry(
         _entry("build", scope=ContextScope.agent), agent=AGENT
     )
-    store.create_shared_context_entry(_entry("build"))
-    with pytest.raises(ValueError, match="already holds"):
-        store.promote_context_entry(uuid=agent_side.uuid)
+    shared_side = store.create_shared_context_entry(_entry("build"))
+
+    moved = store.promote_context_entry(uuid=agent_side.uuid)
+
+    assert moved.scope is ContextScope.shared
+    shared = store.list_shared_context(project=PROJECT)
+    assert [row.theme for row in shared] == ["build", "build"]
+    assert {row.uuid for row in shared} == {shared_side.uuid, agent_side.uuid}
+
+
+def test_two_live_maps_are_named_rather_than_picked_from(store) -> None:
+    """Uniqueness is the uuid's, so a second map row is possible in principle.
+
+    The map is read by project, so serving one of two arbitrarily would answer about a map nobody
+    asked for. It is named instead, the same way a uuid held by both layers is.
+    """
+    store.create_map(OrientationMap(project=PROJECT, full_content="# Map\n\nfirst\n"))
+    with store._conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO shared_record ({', '.join(_SHARED_INSERT)}) "
+            f"VALUES ({', '.join(['%s'] * len(_SHARED_INSERT))})",
+            (
+                "11111111-2222-3333-4444-555555555555", USER, RECORD_TYPE, PROJECT, MAP_TITLE,
+                "[]", "2026-01-01", "2026-01-01", None, None, "# Map\n\nsecond\n", None,
+            ),
+        )
+    with pytest.raises(ValueError, match="live orientation maps"):
+        store.get_map(project=PROJECT)
 
 
 def test_a_uuid_held_by_both_layers_raises(store) -> None:

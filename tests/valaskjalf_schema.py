@@ -9,6 +9,11 @@ constraints are absent on purpose, because nothing here touches them.
 The copy is the one place the boundary costs something, so it is pinned rather than trusted: the
 contract test runs against exactly this schema, so a column the code needs and this file lacks
 fails on every op instead of being discovered in a deployment.
+
+**No unique index on the natural identity, deliberately.** Uniqueness in this store is the `uuid`
+alone, so `(user_id, project, title)` is a name rather than a key: two rows may carry one theme,
+and the store checks nothing when it writes one. The absence is asserted here so a later change
+that adds such an index has to change this file too.
 """
 
 from __future__ import annotations

@@ -122,6 +122,21 @@ async def test_a_prompt_argument_fills_the_placeholder(mcp: FastMCP) -> None:
 
 
 STORE_TOOLS = {
+    "list_shared_context",
+    "list_agent_context",
+    "create_shared_context_entry",
+    "create_agent_context_entry",
+    "promote_context_entry",
+    "demote_context_entry",
+    "read_map",
+    "create_map",
+    "update_map",
+}
+
+#: The names this store used to serve and no longer does. Reading a body, writing one, writing
+#: metadata and retiring a row are the memory layer's, and the file-era checks were each answered
+#: by an op that already existed.
+DROPPED_TOOLS = {
     "list_context_entries",
     "read_context_entry",
     "create_context_entry",
@@ -130,18 +145,21 @@ STORE_TOOLS = {
     "delete_context_entry",
     "check_entry_size",
     "map_exists",
-    "read_map",
-    "create_map",
     "write_map",
 }
 
 
 async def test_the_store_tools_share_the_face(mcp: FastMCP) -> None:
-    """Phase 4's ops are reachable through the same door as the content, which is what makes a
-    served db mechanic ("call § create-context-entry") resolvable by the agent reading it."""
+    """Discovery, creation and the map are reachable through the same door as the content, which
+    is what makes a served db mechanic resolvable by the agent reading it.
+
+    The dropped names are asserted absent in the same pass: a face that keeps a tool nobody
+    documents is worse than one that dropped it where it can be seen.
+    """
     async with Client(mcp) as client:
         names = {tool.name for tool in await client.list_tools()}
     assert STORE_TOOLS <= names
+    assert not (DROPPED_TOOLS & names)
 
 
 async def test_the_awakening_tool_is_registered_and_refuses_an_empty_set(mcp: FastMCP) -> None:

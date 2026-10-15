@@ -1,6 +1,6 @@
 """The contract for the store Hermod reads: Valaskjalf's record tables.
 
-A project-context entry is a `knowledge` record carrying a `project`, the private half is
+A project-context entry is a `knowledge` record carrying a `project`, the agent half is
 agent-scoped, and the map is a `shared_record` row. It supersedes `test_store_backends.py`, which
 covered the store Hermod no longer owns and is deleted with it.
 
@@ -33,8 +33,6 @@ from hermod.data_repositories.record_project_repository import (
     MAP_TITLE,
     RECORD_TYPE,
     RecordProjectRepository,
-    entry_uuid,
-    map_uuid,
 )
 from tests.valaskjalf_schema import make_store
 
@@ -73,13 +71,15 @@ def _entry(theme: str, *, scope: ContextScope = ContextScope.shared, **fields) -
 
 def test_a_shared_entry_is_a_knowledge_record_carrying_the_project(store) -> None:
     """The shape ADR-027 turns on, asserted against the table rather than the interface."""
-    created = store.create_context_entry(_entry("build", content_summary="how it is built"))
-    identity = entry_uuid(user_id=USER, project=PROJECT, scope=ContextScope.shared, theme="build")
+    created = store.create_shared_context_entry(
+        _entry("build", content_summary="how it is built")
+    )
+    assert created.uuid is not None
     with store._conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT record_type, project, title, content_summary FROM shared_record "
             "WHERE uuid = %s",
-            (identity,),
+            (created.uuid,),
         )
         row = cur.fetchone()
     assert row["record_type"] == RECORD_TYPE
@@ -89,187 +89,168 @@ def test_a_shared_entry_is_a_knowledge_record_carrying_the_project(store) -> Non
     assert created.theme == "build"
 
 
-def test_a_private_entry_lives_in_the_agent_scoped_table(store) -> None:
-    store.create_context_entry(_entry("notes", scope=ContextScope.private), agent=AGENT)
-    read = store.get_context_entry(
-        project=PROJECT, scope=ContextScope.private, theme="notes", agent=AGENT
+def test_an_agent_entry_lives_in_the_agent_scoped_table(store) -> None:
+    created = store.create_agent_context_entry(
+        _entry("notes", scope=ContextScope.agent), agent=AGENT
     )
-    assert read is not None
-    assert read.scope is ContextScope.private
-    # Another agent's private scope is a different row, not a filtered view of this one.
-    assert (
-        store.get_context_entry(
-            project=PROJECT, scope=ContextScope.private, theme="notes", agent=OTHER_AGENT
-        )
-        is None
-    )
+    assert created.scope is ContextScope.agent
+    with store._conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT agent_id FROM memory_record WHERE uuid = %s", (created.uuid,))
+        assert cur.fetchone()["agent_id"] == AGENT
+    # Another agent's rows are other rows, not a filtered view of this one.
+    assert store.list_agent_context(project=PROJECT, agent=OTHER_AGENT) == []
 
 
 # --- project context -----------------------------------------------------------------
 
 
 def test_an_entry_round_trips_with_every_field(store) -> None:
-    created = store.create_context_entry(
+    created = store.create_shared_context_entry(
         _entry("build", content_summary="how it is built", tags=["docker", "kamal"])
     )
     assert created.created_date and created.modified_date
 
-    read = store.get_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
-    assert read is not None
+    (read,) = store.list_shared_context(project=PROJECT)
+    assert read.uuid == created.uuid
     assert read.full_content == created.full_content
     assert read.content_summary == "how it is built"
     assert read.tags == ["docker", "kamal"]
 
 
-def test_the_identity_is_derived_so_it_is_stable(store) -> None:
-    created = store.create_context_entry(_entry("build"))
-    assert created.id is not None
-    read = store.get_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
-    assert read is not None and read.id == created.id
+def test_a_create_assigns_a_uuid_and_a_second_one_on_a_theme_is_allowed(store) -> None:
+    """No theme check, by decision: a duplicate theme is an allowed state.
+
+    The caller's own listing is what decides between creating and updating, so the store
+    neither refuses the second create nor revives a retired row on its behalf.
+    """
+    first = store.create_shared_context_entry(
+        _entry("build", full_content="# build\n\nfirst\n")
+    )
+    second = store.create_shared_context_entry(
+        _entry("build", full_content="# build\n\nsecond\n")
+    )
+    assert first.uuid != second.uuid
+    assert [e.theme for e in store.list_shared_context(project=PROJECT)] == ["build", "build"]
 
 
-def test_creating_over_a_live_theme_is_refused(store) -> None:
-    store.create_context_entry(_entry("build"))
-    with pytest.raises(ValueError, match="already exists"):
-        store.create_context_entry(_entry("build"))
-
-
-def test_a_private_create_for_an_unknown_agent_is_refused(store) -> None:
+def test_an_agent_create_for_an_unknown_agent_is_refused(store) -> None:
     """The foreign key is the enforcer; this is only the message it produces."""
     with pytest.raises(ValueError, match="no agent"):
-        store.create_context_entry(_entry("notes", scope=ContextScope.private), agent="nobody")
+        store.create_agent_context_entry(
+            _entry("notes", scope=ContextScope.agent), agent="nobody"
+        )
 
 
-def test_listing_needs_an_agent_once_the_private_scope_is_involved(store) -> None:
-    store.create_context_entry(_entry("build"))
-    store.create_context_entry(_entry("notes", scope=ContextScope.private), agent=AGENT)
-
-    shared = store.list_context_entries(project=PROJECT, scope=ContextScope.shared)
-    assert [e.theme for e in shared] == ["build"]
+def test_an_agent_listing_needs_an_agent_and_both_lists_hide_retired_rows(store) -> None:
+    shared = store.create_shared_context_entry(_entry("build"))
+    agent_entry = store.create_agent_context_entry(
+        _entry("notes", scope=ContextScope.agent), agent=AGENT
+    )
     with pytest.raises(ValueError, match="agent-scoped"):
-        store.list_context_entries(project=PROJECT)
-    both = store.list_context_entries(project=PROJECT, agent=AGENT)
-    assert [e.theme for e in both] == ["build", "notes"]
+        store.list_agent_context(project=PROJECT, agent="")
+    with store._conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE shared_record SET archived_date = '2026-10-15T00:00:00+00:00' "
+            "WHERE uuid = %s",
+            (shared.uuid,),
+        )
+        cur.execute(
+            "UPDATE memory_record SET deleted_date = '2026-10-15T00:00:00+00:00' "
+            "WHERE uuid = %s",
+            (agent_entry.uuid,),
+        )
+    assert store.list_shared_context(project=PROJECT) == []
+    assert store.list_agent_context(project=PROJECT, agent=AGENT) == []
 
 
 def test_a_map_row_is_not_a_context_entry(store) -> None:
     store.create_map(OrientationMap(project=PROJECT, full_content="# Map\n"))
-    assert store.list_context_entries(project=PROJECT, scope=ContextScope.shared) == []
+    assert store.list_shared_context(project=PROJECT) == []
 
 
-def test_update_replaces_body_summary_and_tags(store) -> None:
-    created = store.create_context_entry(_entry("build"))
-    updated = store.update_context_entry(
-        ContextEntry(
-            project=PROJECT,
-            scope=ContextScope.shared,
-            theme="build",
-            full_content="# build\n\nrewritten\n",
-            content_summary="new summary",
-            tags=["x"],
-        )
+def test_promoting_keeps_the_uuid_and_tombstones_the_source(store) -> None:
+    created = store.create_agent_context_entry(
+        _entry("build", scope=ContextScope.agent), agent=AGENT
     )
-    assert updated.created_date == created.created_date
-    assert updated.full_content == "# build\n\nrewritten\n"
-    assert updated.content_summary == "new summary"
-    assert updated.tags == ["x"]
-
-
-def test_update_of_an_absent_entry_is_a_lookup_error(store) -> None:
-    with pytest.raises(LookupError):
-        store.update_context_entry(_entry("absent"))
-
-
-def test_move_moves_the_row_between_tables(store) -> None:
-    created = store.create_context_entry(_entry("build", scope=ContextScope.private), agent=AGENT)
-    moved = store.move_context_entry(
-        project=PROJECT,
-        theme="build",
-        from_scope=ContextScope.private,
-        to_scope=ContextScope.shared,
-        agent=AGENT,
-    )
+    moved = store.promote_context_entry(uuid=created.uuid)
+    assert moved.uuid == created.uuid
     assert moved.scope is ContextScope.shared
     assert moved.full_content == created.full_content
-    assert (
-        store.get_context_entry(
-            project=PROJECT, scope=ContextScope.private, theme="build", agent=AGENT
-        )
-        is None
+    assert store.list_agent_context(project=PROJECT, agent=AGENT) == []
+    (live,) = store.list_shared_context(project=PROJECT)
+    assert live.uuid == created.uuid
+
+
+def test_demoting_needs_an_owner_and_keeps_the_uuid(store) -> None:
+    created = store.create_shared_context_entry(_entry("build"))
+    moved = store.demote_context_entry(uuid=created.uuid, agent=AGENT)
+    assert moved.uuid == created.uuid
+    assert moved.scope is ContextScope.agent
+    (live,) = store.list_agent_context(project=PROJECT, agent=AGENT)
+    assert live.uuid == created.uuid
+    with pytest.raises(ValueError, match="no agent"):
+        store.demote_context_entry(uuid=created.uuid, agent="nobody")
+
+
+def test_a_direction_change_refuses_a_row_already_in_the_target_layer(store) -> None:
+    created = store.create_shared_context_entry(_entry("build"))
+    with pytest.raises(ValueError, match="already lives in"):
+        store.promote_context_entry(uuid=created.uuid)
+
+
+def test_a_direction_change_onto_an_occupied_theme_is_refused(store) -> None:
+    agent_side = store.create_agent_context_entry(
+        _entry("build", scope=ContextScope.agent), agent=AGENT
     )
-    assert store.get_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
-
-
-def test_move_onto_an_occupied_scope_is_refused(store) -> None:
-    store.create_context_entry(_entry("build", scope=ContextScope.private), agent=AGENT)
-    store.create_context_entry(_entry("build", scope=ContextScope.shared))
+    store.create_shared_context_entry(_entry("build"))
     with pytest.raises(ValueError, match="already holds"):
-        store.move_context_entry(
-            project=PROJECT,
-            theme="build",
-            from_scope=ContextScope.private,
-            to_scope=ContextScope.shared,
-            agent=AGENT,
-        )
+        store.promote_context_entry(uuid=agent_side.uuid)
 
 
-def test_delete_tombstones_and_recreating_revives_the_same_row(store) -> None:
-    """The behaviour change derived keys bring, asserted rather than assumed.
-
-    The old store's identity was a partial unique index, so deleting a theme and creating it again
-    produced a *new* row. Here the identity is the uuid, so the same theme is the same row, and a
-    create over a tombstone revives it: one theme keeps one history.
-    """
-    first = store.create_context_entry(_entry("build"))
-    store.delete_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
-
-    assert (
-        store.get_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
-        is None
+def test_a_uuid_held_by_both_layers_raises(store) -> None:
+    """`uuid` is unique within a table and not across the two, so a clash is named, not guessed."""
+    shared = store.create_shared_context_entry(_entry("build"))
+    agent_side = store.create_agent_context_entry(
+        _entry("notes", scope=ContextScope.agent), agent=AGENT
     )
-    assert store.list_context_entries(project=PROJECT, scope=ContextScope.shared) == []
-
-    revived = store.create_context_entry(_entry("build", full_content="# build\n\nsecond\n"))
-    assert revived.id == first.id
-    assert revived.deleted_date is None
-    assert "second" in revived.full_content
-
-
-def test_delete_is_idempotent_but_a_never_present_theme_is_a_lookup_error(store) -> None:
-    store.create_context_entry(_entry("build"))
-    store.delete_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
-    store.delete_context_entry(project=PROJECT, scope=ContextScope.shared, theme="build")
-    with pytest.raises(LookupError):
-        store.delete_context_entry(project=PROJECT, scope=ContextScope.shared, theme="never")
+    with store._conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE memory_record SET uuid = %s WHERE uuid = %s",
+            (shared.uuid, agent_side.uuid),
+        )
+    with pytest.raises(ValueError, match="both layers"):
+        store.promote_context_entry(uuid=shared.uuid)
 
 
 # --- the orientation map -------------------------------------------------------------
 
 
 def test_a_project_starts_with_no_map(store) -> None:
-    assert store.map_exists(project=PROJECT) is False
+    """The read answers the existence question too: an absent map is ``None``."""
     assert store.get_map(project=PROJECT) is None
 
 
-def test_the_map_is_created_once_and_rewritten_after(store) -> None:
+def test_the_map_is_created_once_and_updated_after(store) -> None:
     created = store.create_map(
         OrientationMap(project=PROJECT, full_content="# Map\n\nfirst\n", content_summary="the map")
     )
     with store._conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT title, record_type, project FROM shared_record WHERE uuid = %s",
-            (map_uuid(user_id=USER, project=PROJECT),),
+            "SELECT uuid, record_type, project FROM shared_record "
+            "WHERE title = %s AND project = %s",
+            (MAP_TITLE, PROJECT),
         )
-        row = cur.fetchone()
-    assert row["title"] == MAP_TITLE
-    assert row["record_type"] == RECORD_TYPE
-    assert row["project"] == PROJECT
+        rows = cur.fetchall()
+    assert len(rows) == 1, "a project has one map row"
+    assert rows[0]["uuid"] is not None, "the row's uuid is assigned at insert"
+    assert rows[0]["record_type"] == RECORD_TYPE
+    assert rows[0]["project"] == PROJECT
     assert store.get_map(project=PROJECT).full_content == created.full_content
 
     with pytest.raises(ValueError, match="already has"):
         store.create_map(OrientationMap(project=PROJECT, full_content="# Map\n\nsecond\n"))
 
-    written = store.write_map(
+    written = store.update_map(
         OrientationMap(
             project=PROJECT, full_content="# Map\n\nsecond\n", content_summary="rewritten"
         )
@@ -278,9 +259,9 @@ def test_the_map_is_created_once_and_rewritten_after(store) -> None:
     assert store.get_map(project=PROJECT).content_summary == "rewritten"
 
 
-def test_writing_a_map_that_does_not_exist_is_a_lookup_error(store) -> None:
+def test_updating_a_map_that_does_not_exist_is_a_lookup_error(store) -> None:
     with pytest.raises(LookupError):
-        store.write_map(OrientationMap(project=PROJECT, full_content="# Map\n"))
+        store.update_map(OrientationMap(project=PROJECT, full_content="# Map\n"))
 
 
 # --- the service layer, over the same store ------------------------------------------
@@ -298,25 +279,38 @@ def _service(store, *, with_overlay: bool = True):
     return loader, ContextService(lambda: store, versions)
 
 
-def test_a_write_must_declare_the_stamp_the_served_template_carries(store) -> None:
+def test_a_create_must_declare_the_stamp_the_served_template_carries(store) -> None:
     loader, service = _service(store)
     stamp = loader.template_version("project-context-template")
 
     with pytest.raises(ValueError, match="template_version is required"):
-        service.create_context_entry(
-            project=PROJECT, scope=ContextScope.shared, theme="t", content="# T\n",
-            template_version="",
+        service.create_shared_context_entry(
+            project=PROJECT, theme="t", content="# T\n", template_version="",
+            content_summary="one line",
         )
     with pytest.raises(ValueError, match="does not match"):
-        service.create_context_entry(
-            project=PROJECT, scope=ContextScope.shared, theme="t", content="# T\n",
-            template_version="stale",
+        service.create_shared_context_entry(
+            project=PROJECT, theme="t", content="# T\n", template_version="stale",
+            content_summary="one line",
         )
-    created = service.create_context_entry(
-        project=PROJECT, scope=ContextScope.shared, theme="t", content="# T\n",
-        template_version=stamp,
+    created = service.create_shared_context_entry(
+        project=PROJECT, theme="t", content="# T\n", template_version=stamp,
+        content_summary="one line",
     )
     assert created.theme == "t"
+    assert created.uuid is not None
+
+
+def test_a_create_must_state_a_summary(store) -> None:
+    """The line a listing shows beside the theme is required, and blank is refused."""
+    loader, service = _service(store)
+    stamp = loader.template_version("project-context-template")
+
+    with pytest.raises(ValueError, match="content_summary is required"):
+        service.create_shared_context_entry(
+            project=PROJECT, theme="t", content="# T\n", template_version=stamp,
+            content_summary="   ",
+        )
 
 
 def test_an_entry_over_the_line_cap_is_refused_rather_than_split(store) -> None:
@@ -325,13 +319,10 @@ def test_an_entry_over_the_line_cap_is_refused_rather_than_split(store) -> None:
     stamp = service._template_versions["project-context-template"]
     huge = "\n".join(f"line {i}" for i in range(MAX_ENTRY_LINES + 1))
 
-    verdict = service.check_entry_size(content=huge)
-    assert verdict.oversized is True
-    assert verdict.max_lines == MAX_ENTRY_LINES
-    with pytest.raises(ValueError, match="over the"):
-        service.create_context_entry(
-            project=PROJECT, scope=ContextScope.shared, theme="big", content=huge,
-            template_version=stamp,
+    with pytest.raises(ValueError, match=f"over the {MAX_ENTRY_LINES}-line cap"):
+        service.create_shared_context_entry(
+            project=PROJECT, theme="big", content=huge, template_version=stamp,
+            content_summary="one line",
         )
 
 
@@ -342,19 +333,17 @@ async def test_reads_need_no_overlay_checkout_and_writes_say_why_they_do(store) 
 
     async with Client(mcp) as client:
         assert await client.list_prompts() == []
-        listed = await client.call_tool(
-            "list_context_entries", {"project": PROJECT, "scope": "shared"}
-        )
+        listed = await client.call_tool("list_shared_context", {"project": PROJECT})
         assert listed.data == []
         with pytest.raises(Exception, match="is not served"):
             await client.call_tool(
-                "create_context_entry",
+                "create_shared_context_entry",
                 {
                     "project": PROJECT,
-                    "scope": "shared",
                     "theme": "t",
                     "content": "# T\n",
                     "template_version": "anything",
+                    "content_summary": "one line",
                 },
             )
 
@@ -507,30 +496,30 @@ def test_the_payload_spans_the_set_for_context_and_maps(store) -> None:
     separately and defeats the one call the composite exists for. Seeding two repositories and
     asserting both is what keeps the prose and the loop from drifting apart again: drop either
     loop in ``AwakeningService.awaken`` and the second repository's rows disappear here.
+    Each context row also carries its `uuid`, which is what makes the index actionable: that value
+    is how the memory layer's own read, edit and retire ops are addressed.
     """
-    store.create_context_entry(
+    home = store.create_shared_context_entry(
         ContextEntry(project="home", scope=ContextScope.shared, theme="h", full_content="# h\n")
     )
-    store.create_context_entry(
+    sub = store.create_shared_context_entry(
         ContextEntry(project="sub", scope=ContextScope.shared, theme="s", full_content="# s\n")
     )
     store.create_map(OrientationMap(project="home", full_content="# Map\n\nhome\n"))
 
     payload = AwakeningService(lambda: store).awaken(domain=AGENT, projects=["home", "sub"])
 
-    assert [(row["project"], row["theme"]) for row in payload["context_index"]] == [
-        ("home", "h"),
-        ("sub", "s"),
-    ]
+    assert [
+        (row["project"], row["theme"], row["uuid"]) for row in payload["context_index"]
+    ] == [("home", "h", home.uuid), ("sub", "s", sub.uuid)]
     assert [row["project"] for row in payload["maps"]] == ["home"]
 
 
 # --- the schema copy, pinned to the code rather than trusted -------------------------
 
 #: Columns the code names outside its insert lists: in a `WHERE`, a `SET`, or when mapping a row.
-#: `archived_date` is named because the coding awakening's episode read filters it: Munnin archives
-#: episodes, so an archived one is retired context. The context reads still ignore it — Hermod has
-#: no archive op for its own rows, and nothing archives a context entry.
+#: `archived_date` is named because both the episode reads and the context reads filter it: the
+#: memory layer archives rows, and this store retires a row when the store it reads does.
 _READ_BY_NAME = (
     "id",
     "user_id",

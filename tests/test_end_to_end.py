@@ -120,12 +120,14 @@ async def test_health_answers_on_the_live_server(live_server: str) -> None:
     assert response.json()["service"] == "hermod"
 
 
-async def test_a_context_entry_round_trips_between_the_two_procedures(live_server: str) -> None:
-    """Step 4.4: write through one procedure's op, read back through the other's.
+async def test_a_context_entry_is_created_and_discoverable(live_server: str) -> None:
+    """Write through the capture op, find it through the load op's listing.
 
-    The two procedures call different tools — one creates an entry, the other lists and reads — so a
+    The two procedures call different tools — one creates an entry, the other lists a layer — so a
     round trip across both proves the store is reachable from the served face over real HTTP, and
-    that the scope written is the scope read.
+    that the layer written is the layer listed. What the entry *body* is read with is the memory
+    layer's `get(uuid)`, which is not connected here, so what this test can prove is that the
+    create hands back the uuid which makes that read possible.
     """
     loader = ContentLoader([ContentSource(name="overlay", root=CONTENT)])
     stamp = loader.template_version("project-context-template")
@@ -133,10 +135,9 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
     async with Client(live_server, auth=TOKEN) as client:
         created = (
             await client.call_tool(
-                "create_context_entry",
+                "create_agent_context_entry",
                 {
                     "project": "agent-memory-project",
-                    "scope": "private",
                     "agent": "meta",
                     "theme": "hermod-server-build",
                     "content": "# Hermod Server Build\n\nWhat the build left behind.\n",
@@ -146,42 +147,22 @@ async def test_a_context_entry_round_trips_between_the_two_procedures(live_serve
                 },
             )
         ).data
-        assert created["scope"] == "private"
+        assert created["scope"] == "agent"
         assert created["content_summary"] == "the hermod-server build"
+        assert created["uuid"], "the create must return the uuid the entry is addressed by"
 
         listed = (
             await client.call_tool(
-                "list_context_entries", {"project": "agent-memory-project", "agent": "meta"}
+                "list_agent_context", {"project": "agent-memory-project", "agent": "meta"}
             )
         ).data
-        assert [(row["scope"], row["theme"]) for row in listed] == [
-            ("private", "hermod-server-build")
+        assert [(row["scope"], row["theme"], row["uuid"]) for row in listed] == [
+            ("agent", "hermod-server-build", created["uuid"])
         ]
 
-        read = (
-            await client.call_tool(
-                "read_context_entry",
-                {
-                    "project": "agent-memory-project",
-                    "scope": "private",
-                    "agent": "meta",
-                    "theme": "hermod-server-build",
-                },
-            )
-        ).data
-        assert read["found"] is True
-        assert read["scope"] == "private"
-        assert read["content"].startswith("# Hermod Server Build")
-        assert read["content_summary"] == "the hermod-server build"
-
-        # The other scope is untouched: the entry is addressed, not searched for.
+        # The other layer is untouched: the entry lands where the call said, not in both.
         assert (
             await client.call_tool(
-                "read_context_entry",
-                {
-                    "project": "agent-memory-project",
-                    "scope": "shared",
-                    "theme": "hermod-server-build",
-                },
+                "list_shared_context", {"project": "agent-memory-project"}
             )
-        ).data["found"] is False
+        ).data == []

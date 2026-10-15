@@ -31,7 +31,7 @@ from fastmcp.server.auth import AuthProvider
 from hermod.business_services.awakening_service import AwakeningService
 from hermod.business_services.context_service import ContextService
 from hermod.content.loader import ContentLoader
-from hermod.data_entities.project_context import ContextEntry, ContextScope
+from hermod.data_entities.project_context import ContextEntry
 
 #: What a client is told at ``initialize``. claude.ai and Claude Code inject it into the system
 #: prompt, so it is re-sent on every call of every session — which is why it is four sentences and
@@ -271,31 +271,23 @@ def _register_content(mcp: FastMCP, content: ContentLoader) -> None:
         return {"served": True, "name": name, "content": text}
 
 
-def _scope_arg(value: str | None) -> ContextScope | None:
-    """The scope argument as an enum, or ``None`` for both scopes. A bad value is named rather
-    than swallowed, because a caller that typed a scope meant a specific one."""
-    if value is None:
-        return None
-    try:
-        return ContextScope(value)
-    except ValueError:
-        raise ValueError(f"unknown scope {value!r}; expected 'shared' or 'private'") from None
-
-
 def _register_store(mcp: FastMCP, service: ContextService) -> None:
     """Register the project store's ops as tools.
 
-    One tool per op the served ``db`` mechanics name, so an instruction like "call
-    § create-context-entry" resolves to something the agent can actually call. The two ops with no
-    code behind them (``§ ensure-context-dir``, ``§ update-context-index``) get no tool: the backend
-    document declares them no-ops, so there is nothing to call.
+    Discovery and creation only: a listing per layer, a create per layer, the two direction ops,
+    and the map's three. Everything addressed by a uuid that already exists is a tool on the
+    memory layer (``get``, the ``edit`` family, ``edit_metadata``, ``soft_delete``), because those
+    already act on these rows, so nothing here duplicates one. The three ops with no code behind
+    them (``§ ensure-context-dir``, ``§ update-context-index``, ``§ check-entry-size``) get no
+    tool: the backend document declares them no-ops, so there is nothing to call.
 
     Registered independently of ``content``: the store reaches the memory database by DSN, so its
     tools are served whether or not an overlay checkout is present.
     """
 
-    def _entry(entry: ContextEntry, *, with_content: bool) -> dict[str, Any]:
+    def _entry(entry: ContextEntry) -> dict[str, Any]:
         payload: dict[str, Any] = {
+            "uuid": entry.uuid,
             "project": entry.project,
             "scope": entry.scope.value,
             "theme": entry.theme,
@@ -304,156 +296,112 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
             "created_date": entry.created_date,
             "modified_date": entry.modified_date,
         }
-        if with_content:
-            payload["content"] = entry.full_content
         return payload
 
-    @mcp.tool(title="List project context entries", annotations=_READ)
-    def list_context_entries(
-        project: str, scope: str | None = None, agent: str | None = None
-    ) -> list[dict[str, Any]]:
-        """List a project's context entries — the project's context index.
+    @mcp.tool(title="List the shared project context", annotations=_READ)
+    def list_shared_context(project: str) -> list[dict[str, Any]]:
+        """List a project's shared context entries, the cross-agent half of its context index.
 
-        `scope` narrows to 'shared' or 'private'; omit it for both. An entry is addressed by
-        (project, scope, theme): read one with read_context_entry.
+        Each row carries its `uuid`, and that uuid is how the entry is addressed from then on: a
+        body comes from the memory layer's `get(uuid)`, is changed with its `edit` family, has its
+        summary and tags set with its `edit_metadata`, and is retired with its `soft_delete`. A
+        row with either lifecycle flag set is retired, so it is absent here.
+        """
+        return [_entry(entry) for entry in service.list_shared_context(project=project)]
+
+    @mcp.tool(title="List one agent's project context", annotations=_READ)
+    def list_agent_context(project: str, agent: str) -> list[dict[str, Any]]:
+        """List one agent's own context entries for a project.
+
+        `agent` is required rather than optional, because those rows are owned: answering without
+        it could only be every agent's rows at once. Each row carries its `uuid`.
         """
         return [
-            _entry(entry, with_content=False)
-            for entry in service.list_context_entries(
-                project=project, scope=_scope_arg(scope), agent=agent
-            )
+            _entry(entry)
+            for entry in service.list_agent_context(project=project, agent=agent)
         ]
 
-    @mcp.tool(title="Read a project context entry", annotations=_READ)
-    def read_context_entry(
-        project: str, scope: str, theme: str, agent: str | None = None
-    ) -> dict[str, Any]:
-        """Read one context entry whole, by (project, scope, theme).
-
-        Returns `found: False` when no live entry holds that identity — an answer to give, not an
-        error to raise.
-        """
-        entry = service.read_context_entry(
-            project=project, scope=_scope_arg(scope), theme=theme, agent=agent
-        )
-        if entry is None:
-            return {"found": False}
-        return {"found": True, **_entry(entry, with_content=True)}
-
-    @mcp.tool(title="Create a project context entry", annotations=_WRITE)
-    def create_context_entry(
+    @mcp.tool(title="Create a shared context entry", annotations=_WRITE)
+    def create_shared_context_entry(
         project: str,
-        scope: str,
         theme: str,
         content: str,
         template_version: str,
-        content_summary: str | None = None,
+        content_summary: str,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> dict[str, Any]:
-        """Create one context entry from a filled-in project-context template.
+        """Create one shared entry from a filled-in project-context template.
 
         Read `project-context-template` first and pass the `template_version` stamp it carries: it
-        is a gate, not content, and no stored entry carries it. `content` is the whole document,
-        frontmatter included, minus that stamp. `content_summary` is the one-line summary that
-        frontmatter carries as `description`, and `tags` is its tag list: pass both, so the listing
-        can tell entries apart. Refuses an entry over the line cap, a missing or stale stamp, and an
-        identity that is already taken.
+        is a gate, not content, and no stored entry carries it. `theme` names the entry for a
+        reader, while reading and writing are by `uuid` and never by theme. `content` is the whole
+        document, frontmatter included, minus that stamp. `content_summary` is required, since it
+        is the line a listing shows beside the theme. No theme is checked here, so list first and
+        create only when nothing already covers it.
         """
-        entry = service.create_context_entry(
+        entry = service.create_shared_context_entry(
             project=project,
-            scope=_scope_arg(scope),
             theme=theme,
             content=content,
             template_version=template_version,
             content_summary=content_summary,
             tags=tags,
-            agent=agent,
         )
-        return _entry(entry, with_content=False)
+        return _entry(entry)
 
-    @mcp.tool(title="Update a project context entry", annotations=_WRITE)
-    def update_context_entry(
+    @mcp.tool(title="Create an agent's context entry", annotations=_WRITE)
+    def create_agent_context_entry(
         project: str,
-        scope: str,
+        agent: str,
         theme: str,
         content: str,
         template_version: str,
-        content_summary: str | None = None,
+        content_summary: str,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> dict[str, Any]:
-        """Replace a live context entry: its content, summary and tags.
+        """Create one entry owned by an agent, from the same template and behind the same gates.
 
-        Read `project-context-template` first and pass its `template_version` stamp, exactly as the
-        create does: an update restates the whole document. A **wholesale replace**, exactly as the
-        markdown backend's write-back is: `content_summary` and `tags` default to empty, so a caller
-        that passes only `content` clears them. The entry must already exist, which is what keeps
-        an update from quietly becoming a create.
+        `agent` must be a kebab domain the memory store already holds, because the row carries its
+        owner. Everything else matches the shared create.
         """
-        entry = service.update_context_entry(
+        entry = service.create_agent_context_entry(
             project=project,
-            scope=_scope_arg(scope),
+            agent=agent,
             theme=theme,
             content=content,
             template_version=template_version,
             content_summary=content_summary,
             tags=tags,
-            agent=agent,
         )
-        return _entry(entry, with_content=False)
+        return _entry(entry)
 
-    @mcp.tool(title="Move a context entry between scopes", annotations=_WRITE)
-    def move_context_entry(
-        project: str, theme: str, from_scope: str, to_scope: str, agent: str | None = None
-    ) -> dict[str, Any]:
-        """Promote a private context entry to shared (or the reverse). The body is untouched.
+    @mcp.tool(title="Promote an entry into the shared layer", annotations=_WRITE)
+    def promote_context_entry(uuid: str) -> dict[str, Any]:
+        """Move one entry from an agent's layer into the shared one, body untouched.
 
-        Refuses when the target scope already holds that theme, which is the collision the move
-        sub-flow stops on.
+        The uuid is kept, so a handle a caller already holds still resolves afterwards, and the
+        source row is tombstoned rather than deleted, the same copy-then-delete shape the markdown
+        backend has. Refused when the entry already lives in the shared layer, or when a live
+        shared entry already holds that theme.
         """
-        entry = service.move_context_entry(
-            project=project,
-            theme=theme,
-            from_scope=_scope_arg(from_scope),
-            to_scope=_scope_arg(to_scope),
-            agent=agent,
-        )
-        return _entry(entry, with_content=False)
+        return _entry(service.promote_context_entry(uuid=uuid))
 
-    @mcp.tool(title="Delete a context entry", annotations=_WRITE)
-    def delete_context_entry(
-        project: str, scope: str, theme: str, agent: str | None = None
-    ) -> dict[str, Any]:
-        """Tombstone one context entry. It disappears from every read, and the same theme can be
-        created again afterwards."""
-        service.delete_context_entry(
-            project=project, scope=_scope_arg(scope), theme=theme, agent=agent
-        )
-        return {"deleted": True, "project": project, "scope": scope, "theme": theme}
+    @mcp.tool(title="Demote an entry into an agent's layer", annotations=_WRITE)
+    def demote_context_entry(uuid: str, agent: str) -> dict[str, Any]:
+        """Move one shared entry into one agent's layer, body untouched and uuid kept.
 
-    @mcp.tool(title="Check a context entry's size", annotations=_READ)
-    def check_entry_size(content: str) -> dict[str, Any]:
-        """Measure an entry against the line cap.
-
-        Create and update refuse an oversized entry; this is the measurement they refuse on, for a
-        caller that wants to see it before writing.
+        The owner is required, because the target row carries `agent_id` and a shared row has none
+        to inherit.
         """
-        verdict = service.check_entry_size(content=content)
-        return {
-            "lines": verdict.lines,
-            "max_lines": verdict.max_lines,
-            "oversized": verdict.oversized,
-        }
-
-    @mcp.tool(title="Does a project have an orientation map?", annotations=_READ)
-    def map_exists(project: str) -> dict[str, Any]:
-        """Whether the project has an orientation map. The served § map-exists."""
-        return {"project": project, "exists": service.map_exists(project=project)}
+        return _entry(service.demote_context_entry(uuid=uuid, agent=agent))
 
     @mcp.tool(title="Read the orientation map", annotations=_READ)
     def read_map(project: str) -> dict[str, Any]:
-        """Read the project's orientation map whole, or `found: False`."""
+        """Read the project's orientation map whole, or `found: False`.
+
+        One call answers existence as well, since an absent map comes back as `found: False`, so
+        nothing checks for one first.
+        """
         orientation_map = service.read_map(project=project)
         if orientation_map is None:
             return {"found": False}
@@ -473,8 +421,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         """Create the project's orientation map, from the orientation-map template.
 
         Read `orientation-map-template` first and pass the `template_version` stamp it carries; the
-        map never carries it. Refuses a second map (a project has one, and it is edited
-        thereafter), and a missing or stale stamp.
+        map never carries it. Refuses a second map, since a project has one and it is updated
+        thereafter, and a missing or stale stamp.
         """
         orientation_map = service.create_map(
             project=project,
@@ -484,15 +432,16 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         )
         return {"project": orientation_map.project, "created_date": orientation_map.created_date}
 
-    @mcp.tool(title="Write the orientation map", annotations=_WRITE)
-    def write_map(
+    @mcp.tool(title="Update the orientation map", annotations=_WRITE)
+    def update_map(
         project: str, content: str, template_version: str, content_summary: str | None = None
     ) -> dict[str, Any]:
-        """Rewrite the project's orientation map wholesale.
+        """Rewrite the project's map wholesale.
 
-        It must exist first, and it carries the same template stamp the create declares.
+        It must exist first, which is what keeps an update from quietly becoming a create, and it
+        carries the same template stamp the create declares.
         """
-        orientation_map = service.write_map(
+        orientation_map = service.update_map(
             project=project,
             content=content,
             template_version=template_version,

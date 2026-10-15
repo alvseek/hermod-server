@@ -253,7 +253,7 @@ def discover(source_root: Path) -> tuple[list[EntrySource], list[MapSource]]:
                     EntrySource(
                         path=path,
                         project=project_dir.name,
-                        scope=ContextScope.private,
+                        scope=ContextScope.agent,
                         # The folder is `agent-<domain>`; the store's agent id is the domain.
                         agent=agent_dir.name.removeprefix("agent-"),
                     )
@@ -284,6 +284,9 @@ def import_markdown(
     # carries `agent_id`, so the same theme under two agents is two entries rather than a
     # collision, which is what this importer used to have to report.
     claimed: dict[tuple[str, str, str | None, str], Path] = {}
+    # What each project's layer already holds, read once per layer. The store checks no theme, so
+    # not writing a second row for a theme that is already there is this importer's own job.
+    present: dict[tuple[str, str | None], set[str]] = {}
 
     for source in entries:
         try:
@@ -308,13 +311,18 @@ def import_markdown(
             continue
         claimed[identity] = source.path
 
+        key = (entry.project, source.agent)
+        if key not in present:
+            present[key] = _present_themes(repo, entry.project, source.agent)
+
         try:
-            if _entry_present(repo, entry, source.agent):
+            if entry.theme in present[key]:
                 report.entries_skipped += 1
             elif dry_run:
                 report.entries_created += 1
             else:
-                repo.create_context_entry(entry, agent=source.agent)
+                _create_entry(repo, entry, source.agent)
+                present[key].add(entry.theme)
                 report.entries_created += 1
         except MissingAgentError as exc:
             # The agent has no row in the store, so this entry was **not** written. It is a failure
@@ -322,8 +330,8 @@ def import_markdown(
             # nothing report success, and this count is what a verification reads.
             report.failed.append(f"{source.path}: {exc}")
         except ValueError:
-            # The other refusal a create can raise: the identity is taken. A dry run cannot see
-            # this one, since it never writes; both count it the same way.
+            # A store-level refusal other than a missing agent. The run did not write, so the file
+            # counts as skipped, which is what a taken identity used to mean here.
             report.entries_skipped += 1
         except Exception as exc:  # noqa: BLE001 — a bad file must not end the run
             report.failed.append(f"{source.path}: {exc}")
@@ -335,7 +343,7 @@ def import_markdown(
             report.failed.append(f"{source.path}: {exc}")
             continue
         try:
-            if repo.map_exists(project=source.project):
+            if repo.get_map(project=source.project) is not None:
                 report.maps_skipped += 1
             elif dry_run:
                 report.maps_created += 1
@@ -350,13 +358,30 @@ def import_markdown(
     return report
 
 
-def _entry_present(repo: ProjectRepository, entry: ContextEntry, agent: str | None) -> bool:
-    return (
-        repo.get_context_entry(
-            project=entry.project, scope=entry.scope, theme=entry.theme, agent=agent
-        )
-        is not None
+def _create_entry(repo: ProjectRepository, entry: ContextEntry, agent: str | None) -> None:
+    """Write one entry through the layer it belongs to.
+
+    The two creates differ by the owner alone, which is the only branch here.
+    """
+    if entry.scope is ContextScope.agent:
+        repo.create_agent_context_entry(entry, agent=agent)
+    else:
+        repo.create_shared_context_entry(entry)
+
+
+def _present_themes(repo: ProjectRepository, project: str, agent: str | None) -> set[str]:
+    """The themes a project's layer already holds, read once per layer.
+
+    The store checks no theme, so idempotence is this importer's own job: a second run must not
+    write a second row for a theme that is already there. A list is the only read the store
+    serves, which makes this one call per layer rather than one per file.
+    """
+    entries = (
+        repo.list_agent_context(project=project, agent=agent)
+        if agent is not None
+        else repo.list_shared_context(project=project)
     )
+    return {entry.theme for entry in entries}
 
 
 def main(argv: list[str] | None = None) -> int:

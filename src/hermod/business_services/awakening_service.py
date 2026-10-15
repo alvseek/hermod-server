@@ -52,9 +52,15 @@ class AwakeningService:
 
         context: list[dict[str, object]] = []
         for project in ordered:
+            # Both layers, in the order the single call used to return them: the shared one first,
+            # then this agent's own. A layer is a separate op now, which is what taking the scope
+            # argument off the interface costs here.
+            context += [
+                _context_row(entry) for entry in repo.list_shared_context(project=project)
+            ]
             context += [
                 _context_row(entry)
-                for entry in repo.list_context_entries(project=project, agent=domain)
+                for entry in repo.list_agent_context(project=project, agent=domain)
             ]
 
         maps: list[dict[str, object]] = []
@@ -121,8 +127,13 @@ def _index_row(entry: EpisodeIndexEntry) -> dict[str, object]:
 
 
 def _context_row(entry: ContextEntry) -> dict[str, object]:
-    """The index projection, never the body: a body arrives on relevance (decision 2)."""
+    """The index projection, never the body: a body arrives on relevance (decision 2).
+
+    ``uuid`` is what makes the row addressable: a body is read, edited and retired by that value
+    through the memory layer, so an index without it hands a caller rows it cannot act on.
+    """
     return {
+        "uuid": entry.uuid,
         "project": entry.project,
         "scope": entry.scope.value,
         "theme": entry.theme,

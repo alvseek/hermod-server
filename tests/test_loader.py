@@ -90,8 +90,14 @@ def test_every_op_a_served_prompt_references_resolves(loader: ContentLoader) -> 
 
 
 def test_the_served_backend_is_the_store(loader: ContentLoader) -> None:
-    """Step 4.3: the composed ops are the store's tool calls, not markdown's file mechanics."""
-    assert "create_context_entry(project" in loader.get_prompt("update-project-context")
+    """Step 4.3: the composed ops are the store's tool calls, not markdown's file mechanics.
+
+    Both creates are asserted: the layer is in the tool's name now, so a parser that only looked
+    for one name would let the other half of the surface go unserved.
+    """
+    served = loader.get_prompt("update-project-context")
+    assert "create_shared_context_entry(project" in served
+    assert "create_agent_context_entry(project" in served
 
 
 def test_the_served_wrap_up_pushes_the_project_not_the_store(loader: ContentLoader) -> None:

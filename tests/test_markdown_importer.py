@@ -126,7 +126,7 @@ def test_discovery_uses_the_directory_for_the_project_and_scope(tmp_path: Path) 
     assert by_theme["alpha"].project == "proj-a"
     assert by_theme["alpha"].scope is ContextScope.shared
     assert by_theme["delta"].project == "proj-a"
-    assert by_theme["delta"].scope is ContextScope.private
+    assert by_theme["delta"].scope is ContextScope.agent
     # The private entry's frontmatter also says proj-a; the directory is what is used.
     assert by_theme["gamma"].project == "proj-b"
 
@@ -139,6 +139,15 @@ def test_a_knowledge_base_directory_without_an_index_is_not_project_context(tmp_
 # --- importing -----------------------------------------------------------------------
 
 
+def _by_theme(rows, theme: str):
+    """The first row carrying a theme, or ``None``.
+
+    The store serves lists and never a theme read, so a test that wants one row filters the
+    listing the way a caller does.
+    """
+    return next((row for row in rows if row.theme == theme), None)
+
+
 def test_import_writes_entries_and_the_map(tmp_path: Path, store) -> None:
     repo = store
     report = import_markdown(repo, _memory_root(tmp_path))
@@ -147,7 +156,7 @@ def test_import_writes_entries_and_the_map(tmp_path: Path, store) -> None:
     assert report.maps_created == 1
     assert report.failed == []
 
-    entry = repo.get_context_entry(project="proj-a", scope=ContextScope.shared, theme="alpha")
+    entry = _by_theme(repo.list_shared_context(project="proj-a"), "alpha")
     assert entry is not None
     # The content is the whole document, frontmatter included.
     assert entry.full_content.startswith("---\nproject:")
@@ -167,7 +176,7 @@ def test_an_entry_with_no_frontmatter_still_imports(tmp_path: Path, store) -> No
     repo = store
     import_markdown(repo, _memory_root(tmp_path))
 
-    entry = repo.get_context_entry(project="proj-b", scope=ContextScope.shared, theme="gamma")
+    entry = _by_theme(repo.list_shared_context(project="proj-b"), "gamma")
     assert entry is not None
     assert entry.content_summary is None
     assert entry.tags == []
@@ -205,12 +214,8 @@ def test_two_agents_writing_one_private_theme_are_two_rows(tmp_path: Path, store
 
     assert report.entries_collided == 0
     assert report.collisions == []
-    mine = repo.get_context_entry(
-        project="proj-a", scope=ContextScope.private, theme="delta", agent="meta"
-    )
-    theirs = repo.get_context_entry(
-        project="proj-a", scope=ContextScope.private, theme="delta", agent="other"
-    )
+    mine = _by_theme(repo.list_agent_context(project="proj-a", agent="meta"), "delta")
+    theirs = _by_theme(repo.list_agent_context(project="proj-a", agent="other"), "delta")
     assert mine is not None and "The body." in mine.full_content
     assert theirs is not None and "other agent" in theirs.full_content
 
@@ -220,8 +225,8 @@ def test_a_dry_run_writes_no_rows(tmp_path: Path, store) -> None:
     report = import_markdown(repo, _memory_root(tmp_path), dry_run=True)
 
     assert report.entries_created == 4 and report.maps_created == 1
-    assert repo.list_context_entries(project="proj-a", scope=ContextScope.shared) == []
-    assert repo.map_exists(project="proj-a") is False
+    assert repo.list_shared_context(project="proj-a") == []
+    assert repo.get_map(project="proj-a") is None
 
 
 def test_a_frontmatter_project_that_disagrees_is_reported_not_obeyed(tmp_path: Path, store) -> None:
@@ -236,7 +241,7 @@ def test_a_frontmatter_project_that_disagrees_is_reported_not_obeyed(tmp_path: P
     assert len(report.project_mismatches) == 1
     assert "proj-a" in report.project_mismatches[0]
     # Imported under the directory it sits in, which is the addressing markdown itself uses.
-    assert repo.get_context_entry(project="proj-b", scope=ContextScope.shared, theme="stray")
+    assert _by_theme(repo.list_shared_context(project="proj-b"), "stray") is not None
 
 
 # --- the command line ----------------------------------------------------------------
@@ -262,9 +267,10 @@ def test_main_imports_into_the_tenant_the_pair_names(
 
     assert main(argv) == 0
     assert "imported" in capsys.readouterr().out
-    # alpha and beta are shared, delta is the private entry for the same project.
-    assert len(store.list_context_entries(project="proj-a", agent="meta")) == 3
-    assert store.map_exists(project="proj-a") is True
+    # alpha and beta are shared for that project, delta is the same project's agent entry.
+    assert len(store.list_shared_context(project="proj-a")) == 2
+    assert len(store.list_agent_context(project="proj-a", agent="meta")) == 1
+    assert store.get_map(project="proj-a") is not None
 
 
 def test_main_refuses_a_pair_nobody_has_signed_in_with(

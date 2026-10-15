@@ -269,11 +269,17 @@ class RecordProjectRepository:
                       row["created_date"], moved, None, None, row["full_content"],
                       row["content_summary"])
             )
-            cur.execute(
-                f"INSERT INTO {target} ({', '.join(columns)}) "
-                f"VALUES ({', '.join(['%s'] * len(columns))})",
-                values,
-            )
+            try:
+                cur.execute(
+                    f"INSERT INTO {target} ({', '.join(columns)}) "
+                    f"VALUES ({', '.join(['%s'] * len(columns))})",
+                    values,
+                )
+            except psycopg.errors.ForeignKeyViolation as exc:
+                # The same enforcer the create leans on: moving into the agent layer names an
+                # owner, and `memory_record` refuses one this account has no agent for. Mapped
+                # here too, so a move reports it the way a create does.
+                self._refuse_missing_agent(agent, exc)
             cur.execute(
                 f"UPDATE {source} SET deleted_date = COALESCE(deleted_date, %s) "
                 "WHERE uuid = %s AND user_id = %s",

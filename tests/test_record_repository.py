@@ -188,6 +188,13 @@ def test_demoting_needs_an_owner_and_keeps_the_uuid(store) -> None:
     assert moved.scope is ContextScope.agent
     (live,) = store.list_agent_context(project=PROJECT, agent=AGENT)
     assert live.uuid == created.uuid
+
+
+def test_a_direction_change_into_the_agent_layer_needs_an_existing_owner(store) -> None:
+    """The foreign key is the enforcer, and the message is the store's, as it is on a create."""
+    created = store.create_shared_context_entry(_entry("notes"))
+    with pytest.raises(ValueError, match="agent-scoped"):
+        store.demote_context_entry(uuid=created.uuid, agent="")
     with pytest.raises(ValueError, match="no agent"):
         store.demote_context_entry(uuid=created.uuid, agent="nobody")
 

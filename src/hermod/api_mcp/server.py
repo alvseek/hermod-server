@@ -34,7 +34,7 @@ from hermod.content.loader import ContentLoader
 from hermod.data_entities.project_context import ContextEntry
 
 #: What a client is told at ``initialize``. claude.ai and Claude Code inject it into the system
-#: prompt, so it is re-sent on every call of every session — which is why it is four sentences and
+#: prompt, so it is re-sent on every call of every session — which is why it is six sentences and
 #: not a manual: enough to act on with no other reading, and nothing the tool list already says.
 #: ``help`` returns the same text for clients that ignore it.
 INSTRUCTIONS = (
@@ -47,7 +47,10 @@ INSTRUCTIONS = (
     "A context entry is one of Munnin's records, so reading or editing one goes through Munnin's "
     "own ops, by the uuid a listing returned; agent memory is Munnin's too: a coding client "
     "connects both.\n"
-    "Procedures come from read_procedure(name), never from slash commands."
+    "Procedures come from read_procedure(name), never from slash commands.\n"
+    "Templates are downloaded, not retyped: a procedure that says to take "
+    "`[path-to-agent-memory-<repo>]/<dir>/<stem>.md` means `GET /content/<stem>`, which returns "
+    "the file's bytes."
 )
 
 # Clients read these before letting a tool run. Every tool on this face is read-only, so none of

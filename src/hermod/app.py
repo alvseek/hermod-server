@@ -29,7 +29,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from hermod import __version__
@@ -280,6 +280,15 @@ def build_project_repository(config: Config, *, user_id: str) -> ProjectReposito
     return RecordProjectRepository(user_id=user_id, db_url=config.db_url)
 
 
+class ContentUnavailableError(RuntimeError):
+    """A configured content source is absent, so the server would serve nothing at all.
+
+    Refused rather than degraded: with no source the server still answers ``/health``, offers its
+    store tools and lists an empty procedure menu, which reads exactly like a healthy server. The
+    one thing it must never do is look healthy while serving none of the installed set.
+    """
+
+
 async def health(request: Request) -> JSONResponse:
     """Liveness: the service name and its version, and nothing read from anywhere.
 
@@ -302,9 +311,31 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
     auth = auth if auth is not None else build_auth(config)
     validate_store(config)
     content = ContentLoader(
-        [ContentSource(name="overlay", root=config.content_root)],
+        [ContentSource(name=root.name, root=root) for root in config.content_roots],
         backend_doc=config.backend_doc,
     )
+    absent = [str(source.root) for source in content.sources() if not source.root.is_dir()]
+    if absent:
+        raise ContentUnavailableError(
+            "no content to serve: " + ", ".join(absent) + ". Clone with --recurse-submodules, or "
+            "point HERMOD_CONTENT_ROOTS at a checkout; an absent source would otherwise leave the "
+            "server healthy-looking with an empty prompt set."
+        )
+
+    async def serve_content(request: Request) -> Response:
+        """One served template by name, byte for byte, on the public face.
+
+        The route's shape is its guard: ``{name}`` cannot hold a slash, and the name is looked up
+        in the served set rather than joined into a path, so a traversal attempt is simply an
+        unknown name. It sits on the parent app beside ``/health`` and therefore outside the
+        mounted MCP face's guard, because a template is public content in a public repository
+        and the token lives with the client rather than with the agent's own shell call.
+        """
+        try:
+            body = content.read_resource_bytes(request.path_params["name"])
+        except KeyError:
+            return Response(status_code=404)
+        return Response(content=body, media_type="text/markdown")
     # The tenant is a property of the call, so the repository is built inside it, where the
     # verified token exists and nowhere earlier.
     resolver = TenantResolver(db_url=config.db_url)
@@ -327,6 +358,7 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
     app = Starlette(
         routes=[
             Route("/health", health),
+            Route("/content/{name}", serve_content),
             Mount(MCP_MOUNT_PATH, app=mcp_app),
         ],
         # Without this the MCP session manager never starts: the sub-app's lifespan is its own.

@@ -6,7 +6,7 @@ Python · FastMCP · Starlette. Apache-2.0.
 
 ## What it serves
 
-Seven of the overlay's nine procedures, composed exactly as the overlay's own compiler composes them: component references inlined at their reference point, then the `## Storage Mechanics` section swapped for the backend document's concrete ops. A served Prompt and an installed slash command are the same instruction, which is the property this pipeline exists to hold.
+Eight of the overlay's ten procedures, composed exactly as the overlay's own compiler composes them: component references inlined at their reference point, then the `## Storage Mechanics` section swapped for the backend document's concrete ops. A served Prompt and an installed slash command are the same instruction, which is the property this pipeline exists to hold.
 
 The two that are absent are `push-all` and `pull-all`. They compose the memory store's push and pull, and the memory write is durable on every insert, so there is nothing left for them to do here.
 
@@ -56,12 +56,9 @@ The deployment lives in a separate private repo, `hermod-deploy`, which pins thi
 
 ## The store
 
-Hermod owns project-keyed memory: context entries and the orientation map. Which engine holds it is configuration, because the two halves of the fleet need different ones:
+Hermod owns project-keyed memory: context entries and the orientation map. They live in the database the memory store already uses, so there is one engine and one place, and `HERMOD_DB_URL` is the only way to name it. There is no file backend and no switch: the server refuses to start without a DSN rather than serving under a guess.
 
-- **SQLite** (`HERMOD_DB_BACKEND=sqlite`, the default) for local runs and tests. Needs no service, and the file is gitignored.
-- **Postgres** (`HERMOD_DB_BACKEND=postgres` plus `HERMOD_DB_URL`) for the deployment: a second database on the instance the memory store lives on, not a schema inside it, which is what keeps the two stores' migration runners from sharing one history table.
-
-Both satisfy the same `ProjectRepository` Protocol, and `tests/test_store_backends.py` runs one contract against both engines, so a behaviour that differs between them is a failing test rather than a surprise. Migrations apply lazily on the store's first connection, so a fresh database needs no separate step.
+Munnin starts that database and Hermod only consumes it, which is why no compose lives in this repo. Migrations apply lazily on the store's first connection, so a fresh database needs no separate step.
 
 ## Status
 

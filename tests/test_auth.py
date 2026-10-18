@@ -36,14 +36,19 @@ MCP_HEADERS = {"accept": "application/json, text/event-stream", "content-type": 
 # does not connect until an op runs.
 _UNUSED_STORE = "postgresql://unused:unused@localhost:5432/unused"
 
+# A configured-but-absent content source is refused at boot, so every app test names a real one.
+_CONTENT = Path(__file__).resolve().parents[1] / "agent-memory-project"
+
 
 def _guarded(_db: Path, *subjects: str):
-    return build_app(Config(db_url=_UNUSED_STORE), auth=auth_for(*subjects))
+    return build_app(
+        Config(db_url=_UNUSED_STORE, content_roots=(_CONTENT,)), auth=auth_for(*subjects)
+    )
 
 
 def _local(_db: Path):
     """The unguarded shape, kept for the negative control below: no issuer, so no guard to prove."""
-    config = Config(db_url=_UNUSED_STORE)
+    config = Config(db_url=_UNUSED_STORE, content_roots=(_CONTENT,))
     assert build_auth(config) is None, "the defaults must stay local, or this control is invalid"
     return build_app(config)
 
@@ -148,6 +153,7 @@ def test_the_metadata_document_is_served_from_the_root(tmp_path: Path) -> None:
     app = build_app(
         Config(
             db_url=_UNUSED_STORE,
+            content_roots=(_CONTENT,),
             logto_endpoint="https://auth.lok.quest",
             public_base_url="https://hermod.lok.quest",
         )

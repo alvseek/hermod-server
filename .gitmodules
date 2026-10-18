@@ -1,3 +1,6 @@
 [submodule "agent-memory-project"]
 	path = agent-memory-project
 	url = ../agent-memory-project
+[submodule "agent-memory-wizards"]
+	path = agent-memory-wizards
+	url = ../agent-memory-wizards

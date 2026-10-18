@@ -23,10 +23,11 @@ Two settings deserve a word because they are the seams the plan put here rather 
     form has to pick one explicitly: a served client has no local store, so it composes onto
     the store's ops rather than the markdown ones, which is why ``db.md`` is the default.
 
-``content_root``
-    the overlay checkout to serve, read live on every request. The default is the submodule
-    path, so a clone with ``--recurse-submodules`` works with no configuration; the env var
-    exists so development can point it at a working tree under edit.
+``content_roots``
+    the checkouts to serve, in precedence order, read live on every request. The default is the
+    overlay's submodule path, so a clone with ``--recurse-submodules`` works with no
+    configuration; the env var takes a comma-separated list, which is how a working tree under
+    edit stands in and how a second repository joins.
 """
 
 from __future__ import annotations
@@ -46,9 +47,10 @@ class Config:
     # 8210, not Munnin's 8200: a coding client connects both servers, and the two are meant to
     # run side by side on one machine.
     port: int = 8210
-    # The overlay this server serves — the agent-memory-project submodule, read live.
-    content_root: Path = Path("agent-memory-project")
-    # The storage backend document served prompts compose onto (repo-relative to content_root).
+    # The checkouts this server serves, in precedence order, read live. The overlay's submodule
+    # comes first by default; a second repository joins by name in the same list.
+    content_roots: tuple[Path, ...] = (Path("agent-memory-project"),)
+    # The storage backend document served prompts compose onto (repo-relative to a source root).
     backend_doc: str = DEFAULT_BACKEND_DOC
     # The Valaskjalf DSN: the memory store's database, which holds project-keyed memory as
     # `knowledge` records carrying a `project` (ADR-027). One engine, because it is the only one
@@ -79,12 +81,32 @@ class Config:
     public_base_url: str = "http://127.0.0.1:8210"
 
 
+def _content_roots() -> tuple[Path, ...]:
+    """The served checkouts, in precedence order.
+
+    ``HERMOD_CONTENT_ROOTS`` takes a comma-separated list. ``HERMOD_CONTENT_ROOT`` remains the
+    single-path form, so an environment written before there were two keeps working, and both
+    empty falls back to the overlay's submodule path. Comma-separated rather than one field per
+    repository, for the same reason ``HERMOD_LOGTO_AUDIENCE`` is: the loader already models
+    sources as an ordered list, and a third repository should cost a name rather than a field.
+    """
+    listed = tuple(
+        Path(entry.strip())
+        for entry in os.getenv("HERMOD_CONTENT_ROOTS", "").split(",")
+        if entry.strip()
+    )
+    if listed:
+        return listed
+    single = os.getenv("HERMOD_CONTENT_ROOT", "").strip()
+    return (Path(single),) if single else (Path("agent-memory-project"),)
+
+
 def load_config() -> Config:
     """Build config from defaults + optional env overrides (HERMOD_*)."""
     return Config(
         host=os.getenv("HERMOD_HOST", "127.0.0.1"),
         port=int(os.getenv("HERMOD_PORT", "8210")),
-        content_root=Path(os.getenv("HERMOD_CONTENT_ROOT", "agent-memory-project")),
+        content_roots=_content_roots(),
         backend_doc=os.getenv("HERMOD_BACKEND_DOC", DEFAULT_BACKEND_DOC),
         db_url=os.getenv("HERMOD_DB_URL", ""),
         logto_endpoint=os.getenv("HERMOD_LOGTO_ENDPOINT", ""),

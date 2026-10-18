@@ -58,7 +58,7 @@ def live_server() -> Iterator[str]:
     make_store(url, user_id="alvi", agents=("meta",), identity=(TEST_ISSUER, SUBJECT))
     port = _free_port()
     config = uvicorn.Config(
-        build_app(Config(port=port, db_url=url), auth=auth_for(SUBJECT)),
+        build_app(Config(port=port, db_url=url, content_roots=(CONTENT,)), auth=auth_for(SUBJECT)),
         host="127.0.0.1",
         port=port,
         log_level="warning",

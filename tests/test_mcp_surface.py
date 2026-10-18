@@ -112,6 +112,16 @@ async def test_ping_and_help(mcp: FastMCP) -> None:
     assert len(help_payload["procedures"]) == len(SERVED)
 
 
+def test_the_instructions_state_the_template_rule() -> None:
+    """A served procedure names a template by path, and a client has no such checkout.
+
+    The rule belongs in the instructions because it is the one thing a client cannot derive: the
+    route and the resource share a flat name, so a path's stem is its URL.
+    """
+    assert "downloaded, not retyped" in INSTRUCTIONS
+    assert "/content/<stem>" in INSTRUCTIONS
+
+
 async def test_a_prompt_argument_fills_the_placeholder(mcp: FastMCP) -> None:
     """The slot exists to save a round trip, and it must actually reach the text."""
     async with Client(mcp) as client:

@@ -36,8 +36,12 @@ from hermod.content.inline import inline_components
 from hermod.content.seam_bridge import seam_compose
 
 _PROCEDURES_DIR = "procedures"
-_TEMPLATES_DIR = "templates"
 _COMPONENTS_DIR = "components"
+# The directories a template can live in, in search order. The overlay keeps its two in
+# ``templates/``; a planning cluster that copies plan templates to disk keeps them in
+# ``plan-templates/``. The resource namespace is flat across both, because MCP resources are
+# addressed by name, so a stem has to be unique and the earlier source wins.
+_RESOURCE_DIRS = ("templates", "plan-templates")
 _ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 
 # The server's only say over the overlay's content.
@@ -267,14 +271,37 @@ class ContentLoader:
         text = self._compose_prompt(name)
         return text.replace(_ARGUMENTS_PLACEHOLDER, arguments) if arguments else text
 
-    def _inlined(self, text: str) -> tuple[str, tuple[str, ...]]:
-        """Inline every component reference; returns ``(text, components used)``."""
-        for source in self._sources:
-            components = source.root / _COMPONENTS_DIR
-            if components.is_dir():
-                text, used, _missing = inline_components(text, components)
-                return text, tuple(dict.fromkeys(used))
-        return text, ()
+    def _components_dir(self, root: Path) -> Path | None:
+        """The component directory a procedure's references resolve against.
+
+        The procedure's own source first, then the others in precedence order. A component lives
+        beside the procedures that reference it, and the fallback keeps a cross-repository
+        reference resolving rather than quietly dropping the body.
+        """
+        for candidate in [root, *(source.root for source in self._sources)]:
+            directory = candidate / _COMPONENTS_DIR
+            if directory.is_dir():
+                return directory
+        return None
+
+    def _inlined(self, text: str, root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        """Inline every component reference; returns ``(text, used, missing)``.
+
+        ``missing`` is carried rather than dropped: an unresolvable component is de-linked and its
+        body left out, so the prompt ships with a hole where a paragraph should be, and nothing
+        further down the pipeline would notice.
+        """
+        directory = self._components_dir(root)
+        if directory is None:
+            return text, (), ()
+        text, used, missing = inline_components(text, directory)
+        return text, tuple(dict.fromkeys(used)), tuple(dict.fromkeys(missing))
+
+    def missing_components(self, name: str) -> tuple[str, ...]:
+        """Component references this procedure's served form could not resolve."""
+        path = self._procedure_path(name)
+        _text, _used, missing = self._inlined(path.read_text(encoding="utf-8"), path.parent.parent)
+        return missing
 
     def _compose_prompt(self, name: str) -> str:
         """Inline the components, then substitute the backend's ops for the mechanics marker.
@@ -285,12 +312,18 @@ class ContentLoader:
         core when the procedure has no marker or the backend defines nothing for it.
         """
         path = self._procedure_path(name)
-        core, components = self._inlined(path.read_text(encoding="utf-8"))
+        core, components, _missing = self._inlined(
+            path.read_text(encoding="utf-8"), path.parent.parent
+        )
 
         backend = self._backend_path()
         if backend is None:
             return core
-        compose = seam_compose(str(path.parent.parent))
+        # The seam belongs to the composition, not to the repository a procedure happens to live
+        # in: it comes from whichever source carries the backend document, which is the same
+        # repository, so a second source with no storage backend of its own still composes. A
+        # procedure with no mechanics marker comes back from the substitute untouched.
+        compose = seam_compose(str(backend.parent.parent))
         try:
             section = compose.compose_backend_section(
                 backend.read_text(encoding="utf-8"), name, components
@@ -298,7 +331,7 @@ class ContentLoader:
             composed = compose.substitute_storage_mechanics(core, section)
         except KeyError:
             return core
-        return self._inlined(composed)[0]
+        return self._inlined(composed, path.parent.parent)[0]
 
     def components_used(self, name: str) -> list[str]:
         """The components inlined into this procedure's served form, in order.
@@ -307,7 +340,10 @@ class ContentLoader:
         the one half of composition that is carried here rather than imported, so it is the half
         that needs comparing.
         """
-        _text, used = self._inlined(self._procedure_path(name).read_text(encoding="utf-8"))
+        path = self._procedure_path(name)
+        _text, used, _missing = self._inlined(
+            path.read_text(encoding="utf-8"), path.parent.parent
+        )
         return list(used)
 
     def unresolved_ops(self, name: str) -> list[str]:
@@ -317,16 +353,17 @@ class ContentLoader:
         the reporting half: a served prompt carrying an op nothing defines is a real defect with
         no user on this side to notice it.
         """
-        source_text = self._procedure_path(name).read_text(encoding="utf-8")
+        path = self._procedure_path(name)
+        source_text = path.read_text(encoding="utf-8")
         backend = self._backend_path()
         if backend is None:
             return []
-        compose = seam_compose(str(self._procedure_path(name).parent.parent))
+        compose = seam_compose(str(backend.parent.parent))
         marker = compose.STORAGE_MARKER
         referenced = set(_OP_RE.findall(_body_without_mechanics(source_text, marker)))
         if not referenced:
             return []
-        _core, components = self._inlined(source_text)
+        _core, components, _missing = self._inlined(source_text, path.parent.parent)
         try:
             section = compose.compose_backend_section(
                 backend.read_text(encoding="utf-8"), name, components
@@ -338,25 +375,40 @@ class ContentLoader:
     # --- resources (templates, verbatim) ---------------------------------------
 
     def list_resources(self) -> list[str]:
-        """The served resource names — the templates each source carries."""
+        """The served resource names — every template file, from either resource directory.
+
+        A name carried by two sources resolves to the earlier one, and within a source to
+        ``templates/`` first. The flat set is what both the MCP resources and the content route
+        address, which is why a duplicate is a naming mistake rather than a second entry.
+        """
         names: set[str] = set()
         for source in self._sources:
-            directory = source.root / _TEMPLATES_DIR
-            if directory.is_dir():
-                names |= {p.stem for p in directory.glob("*.md")}
+            for dirname in _RESOURCE_DIRS:
+                directory = source.root / dirname
+                if directory.is_dir():
+                    names |= {p.stem for p in directory.glob("*.md")}
         return sorted(names)
 
     def _resource_path(self, name: str) -> Path:
         """The source file of a served resource. Raises ``KeyError`` if absent."""
         for source in self._sources:
-            candidate = source.root / _TEMPLATES_DIR / f"{name}.md"
-            if candidate.is_file():
-                return candidate
+            for dirname in _RESOURCE_DIRS:
+                candidate = source.root / dirname / f"{name}.md"
+                if candidate.is_file():
+                    return candidate
         raise KeyError(f"unknown resource: {name}")
 
     def get_resource(self, name: str) -> str:
         """Return a template verbatim. Raises ``KeyError`` if absent."""
         return self._resource_path(name).read_text(encoding="utf-8")
+
+    def read_resource_bytes(self, name: str) -> bytes:
+        """The template's file, byte for byte. Raises ``KeyError`` if absent.
+
+        The content route serves this rather than the decoded text, so a download is a copy of
+        the file and never a round trip through an encoding.
+        """
+        return self._resource_path(name).read_bytes()
 
     def template_version(self, name: str) -> str | None:
         """The ``template_version`` stamp a served template carries, or ``None`` if unstamped.

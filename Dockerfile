@@ -2,10 +2,11 @@
 
 # Hermod — the coding overlay's MCP server.
 #
-# Shape: inbound-serving (uvicorn on HERMOD_PORT), file-state (the project store, SQLite).
-# The agent-memory-project submodule is NOT a separate unit — it is read-only content this
-# server loads at runtime (served prompts, plus storage-backends/seam.py loaded by path), so
-# it is copied in as content and never written to.
+# Shape: inbound-serving (uvicorn on HERMOD_PORT). The project store is a database reached over
+# the network, so this image keeps no state of its own and needs a DSN at runtime.
+# The two submodules are NOT separate units — they are read-only content this server loads at
+# runtime (served prompts and templates, plus storage-backends/seam.py loaded by path), so they
+# are copied in as content and never written to.
 
 # ---- Build Stage ----
 FROM python:3.12.14-slim-bookworm AS build
@@ -41,8 +42,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HERMOD_HOST=0.0.0.0 \
     HERMOD_PORT=8210 \
-    HERMOD_DB_PATH=/app/data/hermod.db \
-    HERMOD_CONTENT_ROOT=/app/agent-memory-project
+    HERMOD_CONTENT_ROOTS=/app/agent-memory-project,/app/agent-memory-wizards
 
 WORKDIR /app
 
@@ -56,8 +56,9 @@ RUN groupadd --system --gid 10001 hermod \
 COPY --from=build --chown=hermod:hermod /app/.venv /app/.venv
 COPY --chown=hermod:hermod src ./src
 
-# Served overlay content (the agent-memory-project submodule). Read-only at runtime.
+# Served content: the two submodules, read-only at runtime.
 COPY --chown=hermod:hermod agent-memory-project ./agent-memory-project
+COPY --chown=hermod:hermod agent-memory-wizards ./agent-memory-wizards
 
 # Created here and owned by hermod so a FRESH named volume inherits this
 # ownership instead of coming up root-owned and unwritable.

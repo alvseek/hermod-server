@@ -21,7 +21,7 @@ def test_defaults_are_loopback_and_local() -> None:
     config = Config()
     assert config.host == "127.0.0.1"
     assert config.port == 8210
-    assert config.content_root == Path("agent-memory-project")
+    assert config.content_roots == (Path("agent-memory-project"),)
     # The store's backend document, not markdown's: a served client has no local store.
     assert config.backend_doc == "storage-backends/db.md"
     # One engine, and it is the deployed one: no local file, no backend switch (decision 9).
@@ -59,7 +59,7 @@ def test_env_overrides(monkeypatch) -> None:
     )
     config = load_config()
     assert config.port == 9001
-    assert config.content_root == Path(r"C:\Work\IM\somewhere-else")
+    assert config.content_roots == (Path(r"C:\Work\IM\somewhere-else"),)
     assert config.backend_doc == "storage-backends/markdown.md"
     assert config.logto_endpoint == "https://auth.lok.quest"
     assert config.public_base_url == "https://hermod.lok.quest"
@@ -75,3 +75,21 @@ def test_local_bind_all_is_opt_in(monkeypatch) -> None:
     assert load_config().local_bind_all is False
     monkeypatch.setenv("HERMOD_LOCAL_BIND_ALL", "1")
     assert load_config().local_bind_all is True
+
+
+def test_content_roots_takes_an_ordered_list(monkeypatch) -> None:
+    """Two checkouts are two entries, and the order written is the precedence."""
+    monkeypatch.setenv(
+        "HERMOD_CONTENT_ROOTS", "agent-memory-project, agent-memory-wizards ,"
+    )
+    assert load_config().content_roots == (
+        Path("agent-memory-project"),
+        Path("agent-memory-wizards"),
+    )
+
+
+def test_a_single_root_is_still_a_valid_configuration(monkeypatch) -> None:
+    """The single-path variable predates the list, so an existing environment keeps working."""
+    monkeypatch.setenv("HERMOD_CONTENT_ROOT", "somewhere-else")
+    assert load_config().content_roots == (Path("somewhere-else"),)
+    assert "content_root" not in Config.__dataclass_fields__

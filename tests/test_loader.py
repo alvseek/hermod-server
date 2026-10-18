@@ -1,7 +1,7 @@
 """The loader serves the trimmed overlay and composes it the way the compiler does.
 
 The counts here are facts about `agent-memory-project` at the pin this repo carries, not
-constants someone liked: seven of its nine procedures, two templates, and every `§ op` a served
+constants someone liked: eight of its ten procedures, two templates, and every `§ op` a served
 prompt references defined by the backend document it composes onto.
 """
 
@@ -31,6 +31,102 @@ SERVED = [
 @pytest.fixture
 def loader() -> ContentLoader:
     return ContentLoader([ContentSource(name="project", root=CONTENT)])
+
+
+def _write_resource(root: Path, dirname: str, stem: str, body: str) -> None:
+    (root / dirname).mkdir(parents=True, exist_ok=True)
+    (root / dirname / f"{stem}.md").write_text(body, encoding="utf-8")
+
+
+def test_every_resource_file_is_served_once(loader: ContentLoader) -> None:
+    """The served set is flat, so a stem carried twice shadows rather than adds.
+
+    Counting files against names is the cheap form of that guard: one file per name means no
+    collision, and a planted duplicate breaks the equality.
+    """
+    files = [
+        path
+        for source in loader.sources()
+        for dirname in ("templates", "plan-templates")
+        for path in (source.root / dirname).glob("*.md")
+    ]
+    assert len(loader.list_resources()) == len(files)
+
+
+def test_a_source_with_no_resource_directories_contributes_nothing(tmp_path: Path) -> None:
+    """``agent-memory-fleet`` carries no plan templates, and a missing directory must not raise."""
+    (tmp_path / "procedures").mkdir()
+    loader = ContentLoader([ContentSource(name="bare", root=tmp_path)])
+    assert loader.list_resources() == []
+    with pytest.raises(KeyError):
+        loader.get_resource("anything")
+
+
+def test_plan_templates_are_served_beside_templates(tmp_path: Path) -> None:
+    """Both directories reach the one namespace, and the earlier source wins a shared name."""
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _write_resource(first, "templates", "shared", "first body\n")
+    _write_resource(second, "plan-templates", "shared", "second body\n")
+    _write_resource(first, "plan-templates", "planner", "planner body\n")
+
+    loader = ContentLoader(
+        [ContentSource(name="first", root=first), ContentSource(name="second", root=second)]
+    )
+
+    assert loader.list_resources() == ["planner", "shared"]
+    assert loader.get_resource("planner") == "planner body\n"
+    assert loader.get_resource("shared") == "first body\n"
+
+
+def test_a_second_source_is_composed_from_its_own_components(tmp_path: Path) -> None:
+    """Components resolve beside the procedure that references them, not from the first source.
+
+    This is the defect the loopback proof found: with one root for the whole loader, eight of the
+    wizards' prompts were served with no components inlined at all, and nothing said so.
+    """
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    (first / "procedures").mkdir(parents=True)
+    (first / "procedures" / "one.md").write_text("first body\n", encoding="utf-8")
+    (second / "procedures").mkdir(parents=True)
+    (second / "procedures" / "two.md").write_text(
+        "Lead in. [The Thing](../../second/components/thing.md) tail.\n", encoding="utf-8"
+    )
+    (second / "components").mkdir()
+    (second / "components" / "thing.md").write_text(
+        "# Thing\n\n*Not a standalone skill.*\n\n---\n\nTHING BODY\n", encoding="utf-8"
+    )
+
+    loader = ContentLoader(
+        [ContentSource(name="first", root=first), ContentSource(name="second", root=second)]
+    )
+
+    assert loader.list_prompts() == ["one", "two"]
+    assert "THING BODY" in loader.get_prompt("two")
+    assert loader.missing_components("two") == ()
+
+
+def test_a_missing_component_is_reported_not_dropped(tmp_path: Path) -> None:
+    """A reference that resolves nowhere must be askable, not silently absent from the prompt."""
+    (tmp_path / "procedures").mkdir()
+    (tmp_path / "procedures" / "p.md").write_text(
+        "See [Gone](../../nowhere/components/gone.md).\n", encoding="utf-8"
+    )
+    (tmp_path / "components").mkdir()
+    (tmp_path / "components" / "present.md").write_text(
+        "# Present\n\n*Not a standalone skill.*\n\n---\n\nPRESENT\n", encoding="utf-8"
+    )
+
+    loader = ContentLoader([ContentSource(name="solo", root=tmp_path)])
+
+    assert loader.missing_components("p") == ("gone",)
+    assert "Gone" in loader.get_prompt("p"), "the label survives the de-linking"
+
+
+def test_no_served_prompt_has_a_missing_component(loader: ContentLoader) -> None:
+    """The overlay's own prompts are complete, which is the property every source must hold."""
+    assert [name for name in loader.list_prompts() if loader.missing_components(name)] == []
 
 
 def test_serves_exactly_the_trimmed_set(loader: ContentLoader) -> None:

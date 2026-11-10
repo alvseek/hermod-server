@@ -36,6 +36,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from hermod.business_services.episode_page import DEFAULT_MAX_BODY_BYTES
+
 DEFAULT_BACKEND_DOC = "storage-backends/db.md"
 
 
@@ -79,6 +81,12 @@ class Config:
     # Resource Indicator registered with the issuer. Loopback by default — the only value local
     # mode accepts, and the right one for a laptop; a deployment sets its own.
     public_base_url: str = "http://127.0.0.1:8210"
+    # The content ceiling for one page of an episode body, in UTF-8 bytes. It is Hermod's own
+    # setting rather than a read of Munnin's environment: the two servers deploy separately, and
+    # a value that silently followed a sibling's config could differ from what this process
+    # actually enforces. It bounds the body only and never splits a timestamp group; see
+    # ``business_services/episode_page.py`` for the rule.
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
 
 
 def _content_roots() -> tuple[Path, ...]:
@@ -117,4 +125,23 @@ def load_config() -> Config:
         ),
         local_bind_all=os.getenv("HERMOD_LOCAL_BIND_ALL", "").lower() in {"1", "true", "yes"},
         public_base_url=os.getenv("HERMOD_PUBLIC_BASE_URL", "http://127.0.0.1:8210"),
+        max_body_bytes=_positive_bytes(
+            os.getenv("HERMOD_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES)),
+            name="HERMOD_MAX_BODY_BYTES",
+        ),
     )
+
+
+def _positive_bytes(raw: str, *, name: str) -> int:
+    """Parse the page ceiling, refusing anything that is not a positive whole number.
+
+    A mistyped ceiling must stop the boot rather than quietly restore "no ceiling" or ask for
+    pages that cannot hold a block."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name}={raw!r} is not a whole number of bytes") from exc
+    if value < 1:
+        raise ValueError(f"{name}={raw!r} must be a positive number of bytes")
+    return value
+

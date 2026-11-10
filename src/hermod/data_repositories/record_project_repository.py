@@ -537,6 +537,7 @@ def _row_to_map(row: dict) -> OrientationMap:
 def _row_to_episode(row: dict) -> Episode:
     return Episode(
         id=row["id"],
+        uuid=row["uuid"],
         agent=row["agent_id"],
         project=row["project"],
         title=row["title"],

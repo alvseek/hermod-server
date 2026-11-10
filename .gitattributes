@@ -1,2 +1,7 @@
 # Windows batch files must keep CRLF line endings (safe for CMD, required for label/goto scripts)
 *.bat text eol=crlf
+
+# The conformance artifact is checksummed byte for byte by tests/test_episode_page.py,
+# and it is a copy of Munnin's own. A checkout that rewrote its line endings would fail
+# the sha256 assertion on a machine with core.autocrlf=true, so it must never be text.
+tests/conformance/** -text

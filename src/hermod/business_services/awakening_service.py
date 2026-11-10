@@ -13,18 +13,38 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+from hermod.business_services.episode_page import (
+    DEFAULT_MAX_BODY_BYTES,
+    EpisodePage,
+    page_body,
+)
 from hermod.data_entities.awakening import CodingPattern, Episode, EpisodeIndexEntry
 from hermod.data_entities.project_context import ContextEntry, OrientationMap
 from hermod.data_repositories.project_repository import ProjectRepository
+
+#: How many timestamp groups one project's episode body carries in the awakening. The same
+#: bounded starting context Munnin's chat awakening uses: enough to pick up where the last
+#: session stopped, with a cursor when the record holds more.
+AWAKEN_BLOCK_LIMIT = 3
 
 
 class AwakeningService:
     """The coding half of an awakening, in one read-only call."""
 
-    def __init__(self, repository_for: Callable[[], ProjectRepository]) -> None:
+    def __init__(
+        self,
+        repository_for: Callable[[], ProjectRepository],
+        *,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    ) -> None:
         # A factory for the same reason ContextService takes one: the tenant is a property of the
         # verified token on *this* call, never of the process.
+        if isinstance(max_body_bytes, bool) or not isinstance(max_body_bytes, int):
+            raise ValueError("max_body_bytes must be a whole number of bytes")
+        if max_body_bytes < 1:
+            raise ValueError("max_body_bytes must be a positive number of bytes")
         self._repository_for = repository_for
+        self._max_body_bytes = max_body_bytes
 
     def awaken(self, *, domain: str, projects: Sequence[str]) -> dict[str, object]:
         """The payload for one coding awakening.
@@ -72,13 +92,22 @@ class AwakeningService:
         return {
             # the overlay's own lane, whole: it is what makes this an awakening for a coder
             "coding_lane": [_pattern_row(pattern) for pattern in repo.coding_lane()],
-            # the set's episodes: the index to choose from, and the newest body per project, which
-            # is where the open items a session carries forward actually live
+            # the set's episodes: the index to choose from, and the newest page per project, which
+            # is where the open items a session carries forward actually live. A page, not a body:
+            # each row names its uuid and cursor so the rest is one Munnin `get` away, and the
+            # two-call awakening stays two calls.
             "episode_index": [
                 _index_row(entry) for entry in repo.episode_index(agent=domain, projects=ordered)
             ],
             "episodes": [
-                _episode_row(episode)
+                _episode_row(
+                    episode,
+                    page_body(
+                        episode.full_content or "",
+                        limit=AWAKEN_BLOCK_LIMIT,
+                        max_body_bytes=self._max_body_bytes,
+                    ),
+                )
                 for episode in repo.newest_episode_per_project(agent=domain, projects=ordered)
             ],
             # this server's own: the context index for the set, and one map per project that has
@@ -104,13 +133,20 @@ def _pattern_row(pattern: CodingPattern) -> dict[str, object]:
     }
 
 
-def _episode_row(episode: Episode) -> dict[str, object]:
+def _episode_row(episode: Episode, page: EpisodePage) -> dict[str, object]:
+    """One project's newest episode as a page, plus the uuid that makes it continuable.
+
+    ``uuid`` is not decoration: the page's content is deliberately partial, and the only way to
+    ask for the next timestamp group is Munnin's ``get(uuid, cursor=…)``. A row without it hands
+    a caller a body it cannot finish reading."""
     return {
+        "uuid": episode.uuid,
         "project": episode.project,
         "title": episode.title,
         "created_date": episode.created_date,
         "modified_date": episode.modified_date,
-        "content": episode.full_content,
+        **page.fields(),
+        "content": page.content,
     }
 
 

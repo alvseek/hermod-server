@@ -1,0 +1,539 @@
+{
+  "version": "2026-11-10",
+  "purpose": "Shared conformance vectors for the episodic timestamp-group pager. Munnin's business_services/episode_page.py and Hermod's independently housed equivalent must both pass this file verbatim; the two test modules record this file's sha256 so a drifted copy is loud.",
+  "contract": [
+    "One page unit is a timestamp group: every sub-episode block sharing one H3 timestamp, indivisible, counted once in blocks_returned/blocks_total and once against limit.",
+    "A boundary is an H3 heading whose text opens with YYYY-MM-DD HH.MM; the historical [YYYY-MM-DD HH.MM] and HH:MM spellings are equivalent, and a cursor may be written in any of them.",
+    "The preamble belongs to the first group. A body with no usable timestamp header is one atomic group. splittable=false bypasses splitting for non-episode records.",
+    "cursor resumes at its own group, inclusive. next_cursor is the first group not emitted, verbatim, and null on a final page.",
+    "max_body_bytes caps UTF-8 content bytes. The first selected group is emitted whole even when oversized; later groups are added only while they fit.",
+    "A read that emits every group from the first returns the stored body byte for byte, even when equal timestamps were non-adjacent."
+  ],
+  "vectors": [
+    {
+      "name": "empty-body",
+      "splittable": true,
+      "content": "",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "",
+        "blocks_returned": 1,
+        "blocks_total": 1,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "no-headers",
+      "splittable": true,
+      "content": "A plain body.\n\nNo timestamps here.\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "A plain body.\n\nNo timestamps here.\n",
+        "blocks_returned": 1,
+        "blocks_total": 1,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "one-group",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+        "blocks_returned": 1,
+        "blocks_total": 1,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "one-group-limit-1",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+        "blocks_returned": 1,
+        "blocks_total": 1,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "many-units-page-1",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n### 2026-11-10 10.03 - gamma\n\nthird body\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+        "blocks_returned": 1,
+        "blocks_total": 3,
+        "next_cursor": "2026-11-10 10.04"
+      }
+    },
+    {
+      "name": "many-units-page-2",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n### 2026-11-10 10.03 - gamma\n\nthird body\n",
+      "cursor": "2026-11-10 10.04",
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.04 - beta\n\nsecond body\n",
+        "blocks_returned": 1,
+        "blocks_total": 3,
+        "next_cursor": "2026-11-10 10.03"
+      }
+    },
+    {
+      "name": "many-units-terminal",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n### 2026-11-10 10.03 - gamma\n\nthird body\n",
+      "cursor": "2026-11-10 10.03",
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.03 - gamma\n\nthird body\n",
+        "blocks_returned": 1,
+        "blocks_total": 3,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "many-units-limit-over-total",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n### 2026-11-10 10.03 - gamma\n\nthird body\n",
+      "cursor": null,
+      "limit": 99,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n### 2026-11-10 10.03 - gamma\n\nthird body\n",
+        "blocks_returned": 3,
+        "blocks_total": 3,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "many-units-whole-default",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n### 2026-11-10 10.03 - gamma\n\nthird body\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n### 2026-11-10 10.03 - gamma\n\nthird body\n",
+        "blocks_returned": 3,
+        "blocks_total": 3,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "equal-timestamps-adjacent-limit-1",
+      "splittable": true,
+      "content": "### 2026-11-08 09.00 - one\n\none\n### 2026-11-08 09.00 - two\n\ntwo\n### 2026-11-08 08.00 - three\n\nthree\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-08 09.00 - one\n\none\n### 2026-11-08 09.00 - two\n\ntwo\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-11-08 08.00"
+      }
+    },
+    {
+      "name": "equal-timestamps-adjacent-resume",
+      "splittable": true,
+      "content": "### 2026-11-08 09.00 - one\n\none\n### 2026-11-08 09.00 - two\n\ntwo\n### 2026-11-08 08.00 - three\n\nthree\n",
+      "cursor": "2026-11-08 09.00",
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-08 09.00 - one\n\none\n### 2026-11-08 09.00 - two\n\ntwo\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-11-08 08.00"
+      }
+    },
+    {
+      "name": "equal-timestamps-adjacent-terminal",
+      "splittable": true,
+      "content": "### 2026-11-08 09.00 - one\n\none\n### 2026-11-08 09.00 - two\n\ntwo\n### 2026-11-08 08.00 - three\n\nthree\n",
+      "cursor": "2026-11-08 08.00",
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-08 08.00 - three\n\nthree\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "equal-timestamps-nonadjacent-page-1",
+      "splittable": true,
+      "content": "### 2026-11-09 11.00 - a\n\nA\n### 2026-11-09 10.00 - b\n\nB\n### 2026-11-09 11.00 - c\n\nC\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-09 11.00 - a\n\nA\n### 2026-11-09 11.00 - c\n\nC\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-11-09 10.00"
+      }
+    },
+    {
+      "name": "equal-timestamps-nonadjacent-terminal",
+      "splittable": true,
+      "content": "### 2026-11-09 11.00 - a\n\nA\n### 2026-11-09 10.00 - b\n\nB\n### 2026-11-09 11.00 - c\n\nC\n",
+      "cursor": "2026-11-09 10.00",
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-09 10.00 - b\n\nB\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "equal-timestamps-nonadjacent-whole-is-verbatim",
+      "splittable": true,
+      "content": "### 2026-11-09 11.00 - a\n\nA\n### 2026-11-09 10.00 - b\n\nB\n### 2026-11-09 11.00 - c\n\nC\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-09 11.00 - a\n\nA\n### 2026-11-09 10.00 - b\n\nB\n### 2026-11-09 11.00 - c\n\nC\n",
+        "blocks_returned": 2,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "legacy-spellings-group-together",
+      "splittable": true,
+      "content": "### [2026-09-01 15:12] - historic\n\nbody\n### 2026-09-01 15.12 - modern\n\nbody two\n### [2026-08-25 07.01] - older\n\nolder body\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### [2026-09-01 15:12] - historic\n\nbody\n### 2026-09-01 15.12 - modern\n\nbody two\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-08-25 07.01"
+      }
+    },
+    {
+      "name": "legacy-cursor-colon-resolves-dot",
+      "splittable": true,
+      "content": "### [2026-09-01 15:12] - historic\n\nbody\n### 2026-09-01 15.12 - modern\n\nbody two\n### [2026-08-25 07.01] - older\n\nolder body\n",
+      "cursor": "2026-08-25 07:01",
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### [2026-08-25 07.01] - older\n\nolder body\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "legacy-cursor-bracketed-resolves",
+      "splittable": true,
+      "content": "### [2026-09-01 15:12] - historic\n\nbody\n### 2026-09-01 15.12 - modern\n\nbody two\n### [2026-08-25 07.01] - older\n\nolder body\n",
+      "cursor": "[2026-08-25 07.01]",
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### [2026-08-25 07.01] - older\n\nolder body\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "nested-ordinary-h3-is-not-a-boundary",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\n### Discussion\n\nnot a boundary\n### 2026-11-10 10.04 - beta\n\nbody\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\n### Discussion\n\nnot a boundary\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-11-10 10.04"
+      }
+    },
+    {
+      "name": "fenced-fake-heading-is-not-a-boundary",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\n```markdown\n### 2026-11-10 10.04 - fake\n```\n### 2026-11-10 10.03 - beta\n\nbody\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\n```markdown\n### 2026-11-10 10.04 - fake\n```\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-11-10 10.03"
+      }
+    },
+    {
+      "name": "preamble-rides-with-first-group",
+      "splittable": true,
+      "content": "Record introduction.\n\n### 2026-11-10 10.05 - alpha\n\nbody\n### 2026-11-10 10.04 - beta\n\nbody2\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "Record introduction.\n\n### 2026-11-10 10.05 - alpha\n\nbody\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-11-10 10.04"
+      }
+    },
+    {
+      "name": "date-only-heading-is-not-usable",
+      "splittable": true,
+      "content": "### 2026-11-10 - date only\n\nbody\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 - date only\n\nbody\n",
+        "blocks_returned": 1,
+        "blocks_total": 1,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "impossible-date-is-not-a-boundary",
+      "splittable": true,
+      "content": "### 2026-02-30 10.05 - impossible\n\nbody\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-02-30 10.05 - impossible\n\nbody\n",
+        "blocks_returned": 1,
+        "blocks_total": 1,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "crlf-page-1",
+      "splittable": true,
+      "content": "### 2026-05-01 10.00 - a\r\n\r\nA\r\n### 2026-05-01 09.00 - b\r\n\r\nB\r\n",
+      "cursor": null,
+      "limit": 1,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-05-01 10.00 - a\r\n\r\nA\r\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-05-01 09.00"
+      }
+    },
+    {
+      "name": "crlf-whole-is-verbatim",
+      "splittable": true,
+      "content": "### 2026-05-01 10.00 - a\r\n\r\nA\r\n### 2026-05-01 09.00 - b\r\n\r\nB\r\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-05-01 10.00 - a\r\n\r\nA\r\n### 2026-05-01 09.00 - b\r\n\r\nB\r\n",
+        "blocks_returned": 2,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "no-trailing-newline-whole-is-verbatim",
+      "splittable": true,
+      "content": "### 2026-04-01 10.00 - a\n\nA\n### 2026-04-01 09.00 - b\n\nB",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-04-01 10.00 - a\n\nA\n### 2026-04-01 09.00 - b\n\nB",
+        "blocks_returned": 2,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "ceiling-exact-fits-both",
+      "splittable": true,
+      "content": "### 2026-07-01 10.00 - a\n\nA\n### 2026-07-01 09.00 - b\n\nB\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": 56,
+      "expected": {
+        "content": "### 2026-07-01 10.00 - a\n\nA\n### 2026-07-01 09.00 - b\n\nB\n",
+        "blocks_returned": 2,
+        "blocks_total": 2,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "ceiling-stops-before-exceeding",
+      "splittable": true,
+      "content": "### 2026-07-01 10.00 - a\n\nA\n### 2026-07-01 09.00 - b\n\nB\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": 55,
+      "expected": {
+        "content": "### 2026-07-01 10.00 - a\n\nA\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-07-01 09.00"
+      }
+    },
+    {
+      "name": "ceiling-oversized-first-group-still-emitted",
+      "splittable": true,
+      "content": "### 2026-07-01 10.00 - a\n\nA\n### 2026-07-01 09.00 - b\n\nB\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": 5,
+      "expected": {
+        "content": "### 2026-07-01 10.00 - a\n\nA\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-07-01 09.00"
+      }
+    },
+    {
+      "name": "ceiling-counts-utf8-bytes-not-characters",
+      "splittable": true,
+      "content": "### 2026-06-01 10.00 - naïve\n\ncafé — naïve\n### 2026-06-01 09.00 - plain\n\nplain\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": 83,
+      "expected": {
+        "content": "### 2026-06-01 10.00 - naïve\n\ncafé — naïve\n",
+        "blocks_returned": 1,
+        "blocks_total": 2,
+        "next_cursor": "2026-06-01 09.00"
+      }
+    },
+    {
+      "name": "unsplittable-is-one-atomic-group",
+      "splittable": false,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n",
+        "blocks_returned": 1,
+        "blocks_total": 1,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "unsplittable-cursor-is-refused",
+      "splittable": false,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n### 2026-11-10 10.04 - beta\n\nsecond body\n",
+      "cursor": "2026-11-10 10.04",
+      "limit": null,
+      "max_body_bytes": null,
+      "error_contains": "cursor"
+    },
+    {
+      "name": "thirty-groups-page-1",
+      "splittable": true,
+      "content": "### 2026-01-01 10.00 - g00\n\nbody 00\n### 2026-01-01 10.01 - g01\n\nbody 01\n### 2026-01-01 10.02 - g02\n\nbody 02\n### 2026-01-01 10.03 - g03\n\nbody 03\n### 2026-01-01 10.04 - g04\n\nbody 04\n### 2026-01-01 10.05 - g05\n\nbody 05\n### 2026-01-01 10.06 - g06\n\nbody 06\n### 2026-01-01 10.07 - g07\n\nbody 07\n### 2026-01-01 10.08 - g08\n\nbody 08\n### 2026-01-01 10.09 - g09\n\nbody 09\n### 2026-01-01 10.10 - g10\n\nbody 10\n### 2026-01-01 10.11 - g11\n\nbody 11\n### 2026-01-01 10.12 - g12\n\nbody 12\n### 2026-01-01 10.13 - g13\n\nbody 13\n### 2026-01-01 10.14 - g14\n\nbody 14\n### 2026-01-01 10.15 - g15\n\nbody 15\n### 2026-01-01 10.16 - g16\n\nbody 16\n### 2026-01-01 10.17 - g17\n\nbody 17\n### 2026-01-01 10.18 - g18\n\nbody 18\n### 2026-01-01 10.19 - g19\n\nbody 19\n### 2026-01-01 10.20 - g20\n\nbody 20\n### 2026-01-01 10.21 - g21\n\nbody 21\n### 2026-01-01 10.22 - g22\n\nbody 22\n### 2026-01-01 10.23 - g23\n\nbody 23\n### 2026-01-01 10.24 - g24\n\nbody 24\n### 2026-01-01 10.25 - g25\n\nbody 25\n### 2026-01-01 10.26 - g26\n\nbody 26\n### 2026-01-01 10.27 - g27\n\nbody 27\n### 2026-01-01 10.28 - g28\n\nbody 28\n### 2026-01-01 10.29 - g29\n\nbody 29\n",
+      "cursor": null,
+      "limit": 3,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-01-01 10.00 - g00\n\nbody 00\n### 2026-01-01 10.01 - g01\n\nbody 01\n### 2026-01-01 10.02 - g02\n\nbody 02\n",
+        "blocks_returned": 3,
+        "blocks_total": 30,
+        "next_cursor": "2026-01-01 10.03"
+      }
+    },
+    {
+      "name": "thirty-groups-terminal",
+      "splittable": true,
+      "content": "### 2026-01-01 10.00 - g00\n\nbody 00\n### 2026-01-01 10.01 - g01\n\nbody 01\n### 2026-01-01 10.02 - g02\n\nbody 02\n### 2026-01-01 10.03 - g03\n\nbody 03\n### 2026-01-01 10.04 - g04\n\nbody 04\n### 2026-01-01 10.05 - g05\n\nbody 05\n### 2026-01-01 10.06 - g06\n\nbody 06\n### 2026-01-01 10.07 - g07\n\nbody 07\n### 2026-01-01 10.08 - g08\n\nbody 08\n### 2026-01-01 10.09 - g09\n\nbody 09\n### 2026-01-01 10.10 - g10\n\nbody 10\n### 2026-01-01 10.11 - g11\n\nbody 11\n### 2026-01-01 10.12 - g12\n\nbody 12\n### 2026-01-01 10.13 - g13\n\nbody 13\n### 2026-01-01 10.14 - g14\n\nbody 14\n### 2026-01-01 10.15 - g15\n\nbody 15\n### 2026-01-01 10.16 - g16\n\nbody 16\n### 2026-01-01 10.17 - g17\n\nbody 17\n### 2026-01-01 10.18 - g18\n\nbody 18\n### 2026-01-01 10.19 - g19\n\nbody 19\n### 2026-01-01 10.20 - g20\n\nbody 20\n### 2026-01-01 10.21 - g21\n\nbody 21\n### 2026-01-01 10.22 - g22\n\nbody 22\n### 2026-01-01 10.23 - g23\n\nbody 23\n### 2026-01-01 10.24 - g24\n\nbody 24\n### 2026-01-01 10.25 - g25\n\nbody 25\n### 2026-01-01 10.26 - g26\n\nbody 26\n### 2026-01-01 10.27 - g27\n\nbody 27\n### 2026-01-01 10.28 - g28\n\nbody 28\n### 2026-01-01 10.29 - g29\n\nbody 29\n",
+      "cursor": "2026-01-01 10.29",
+      "limit": 3,
+      "max_body_bytes": null,
+      "expected": {
+        "content": "### 2026-01-01 10.29 - g29\n\nbody 29\n",
+        "blocks_returned": 1,
+        "blocks_total": 30,
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "invalid-cursor-text",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": "not-a-timestamp",
+      "limit": null,
+      "max_body_bytes": null,
+      "error_contains": "cursor"
+    },
+    {
+      "name": "unknown-cursor-moment",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": "2020-01-01 00.00",
+      "limit": null,
+      "max_body_bytes": null,
+      "error_contains": "cursor"
+    },
+    {
+      "name": "invalid-cursor-impossible-date",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": "2026-02-30 10.05",
+      "limit": null,
+      "max_body_bytes": null,
+      "error_contains": "cursor"
+    },
+    {
+      "name": "zero-limit-refused",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": null,
+      "limit": 0,
+      "max_body_bytes": null,
+      "error_contains": "limit"
+    },
+    {
+      "name": "negative-limit-refused",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": null,
+      "limit": -1,
+      "max_body_bytes": null,
+      "error_contains": "limit"
+    },
+    {
+      "name": "zero-ceiling-refused",
+      "splittable": true,
+      "content": "### 2026-11-10 10.05 - alpha\n\nfirst body\n",
+      "cursor": null,
+      "limit": null,
+      "max_body_bytes": 0,
+      "error_contains": "max_body_bytes"
+    }
+  ]
+}

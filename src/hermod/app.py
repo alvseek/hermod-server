@@ -269,6 +269,13 @@ def validate_store(config: Config) -> None:
             "lives in Valaskjalf's records (ADR-027), and there is no second engine to fall back "
             "to: SQLite was removed with decision 9."
         )
+    if isinstance(config.max_body_bytes, bool) or not isinstance(config.max_body_bytes, int):
+        raise StoreConfigError("HERMOD_MAX_BODY_BYTES must be a whole number of bytes.")
+    if config.max_body_bytes < 1:
+        raise StoreConfigError(
+            f"HERMOD_MAX_BODY_BYTES={config.max_body_bytes!r} must be a positive number of bytes: "
+            "a page always holds at least one timestamp group."
+        )
 
 
 def build_project_repository(config: Config, *, user_id: str) -> ProjectRepository:
@@ -352,7 +359,7 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
     )
     # One factory, two services: the store's ops and the awakening both resolve the tenant per
     # call, for the same reason.
-    awakening = AwakeningService(repository_for)
+    awakening = AwakeningService(repository_for, max_body_bytes=config.max_body_bytes)
     mcp_app = build_mcp(content, service, awakening, auth=auth).http_app(path="/")
 
     app = Starlette(

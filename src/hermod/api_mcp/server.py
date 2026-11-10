@@ -137,6 +137,11 @@ def _register_awakening(mcp: FastMCP, awakening: AwakeningService) -> None:
         it. That first element is the session's home, not a filter: every part of the payload spans
         the whole set, because the related set widens the recall rather than moving the session. A
         reordered list makes a different repository the session's home.
+
+        Each row of ``episodes`` is a **page**, not the whole rolling body: up to three timestamp
+        groups, with ``blocks_returned``/``blocks_total`` and a ``next_cursor`` when more remains.
+        Every row carries ``uuid``, because finishing the read is Munnin's ``get(uuid, cursor=…)``
+        and that is the only address it accepts. ``episode_index`` is unchanged.
         """
         return awakening.awaken(domain=domain, projects=projects)
 

@@ -23,10 +23,13 @@ from dataclasses import dataclass, field
 class Episode:
     """One episodic record, whole.
 
-    ``id`` is the store's own rowid and never leaves it. ``project`` is nullable in the table
-    and non-null for every row the awakening reads, because the read selects by it: an
-    episode with no project belongs to no repository and is not carried forward for one."""
+    ``id`` is the store's own rowid and never leaves it. ``uuid`` is the record's portable
+    identity and **does** leave: without it a caller holding a paged body could not ask for the
+    next page, since ``get`` addresses records by uuid. ``project`` is nullable in the table and
+    non-null for every row the awakening reads, because the read selects by it: an episode with
+    no project belongs to no repository and is not carried forward for one."""
 
+    uuid: str
     title: str
     full_content: str
     project: str | None = None

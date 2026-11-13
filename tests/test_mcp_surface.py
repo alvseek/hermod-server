@@ -188,3 +188,65 @@ async def test_the_awakening_tool_is_registered_and_refuses_an_empty_set(mcp: Fa
         # one out would answer about a different repository than the caller named.
         with pytest.raises(Exception, match="must name one"):
             await client.call_tool("awaken_coder", {"domain": "meta", "projects": [""]})
+
+
+async def test_every_tool_and_parameter_explains_its_contract(mcp: FastMCP) -> None:
+    async with Client(mcp) as client:
+        tools = {tool.name: tool for tool in await client.list_tools()}
+    for name, tool in tools.items():
+        assert tool.description, name
+        for parameter, schema in tool.input_schema.get("properties", {}).items():
+            assert schema.get("description"), (name, parameter)
+    assert tools["awaken_coder"].input_schema["required"] == ["domain", "projects"]
+    assert tools["read_procedure"].input_schema["properties"]["argument"]["default"] is None
+    assert tools["update_map"].input_schema["properties"]["content_summary"]["default"] is None
+    assert (
+        "clears"
+        in (tools["update_map"].input_schema["properties"]["content_summary"]["description"])
+    )
+    assert (
+        "prefixes are not resolved"
+        in (tools["promote_context_entry"].input_schema["properties"]["uuid"]["description"])
+    )
+    assert "not an upsert" in tools["create_shared_context_entry"].description
+    assert "1000" in tools["create_agent_context_entry"].description
+
+
+async def test_all_sources_share_native_and_tool_metadata() -> None:
+    content = ContentLoader(
+        [
+            ContentSource(name="project", root=CONTENT),
+            ContentSource(name="wizards", root=ROOT / "agent-memory-wizards"),
+        ]
+    )
+
+    # Discovery never needs a database. Refuse accidental dependency calls rather than using a DSN.
+    def no_repository():
+        raise AssertionError("metadata discovery must not access project memory")
+
+    mcp = build_mcp(content, ContextService(no_repository), AwakeningService(no_repository))
+    async with Client(mcp) as client:
+        prompts = await client.list_prompts()
+        resources = await client.list_resources()
+        procedures = (await client.call_tool("list_procedures")).data
+        templates = (await client.call_tool("list_resources")).data
+    procedure_rows = {row["name"]: row for row in procedures}
+    resource_rows = {row["name"]: row for row in templates}
+    assert set(procedure_rows) == set(content.list_prompts())
+    assert set(procedure_rows) == {prompt.name for prompt in prompts}
+    assert set(resource_rows) == set(content.list_resources())
+    assert set(resource_rows) == {resource.name for resource in resources}
+    for prompt in prompts:
+        assert prompt.description == procedure_rows[prompt.name]["description"]
+        assert "does not execute" in prompt.description
+        expected = content.argument_prompt(prompt.name)
+        arguments = prompt.arguments or []
+        assert len(arguments) == (1 if expected else 0)
+        for argument in arguments:
+            assert argument.name == expected[0]
+            assert expected[1] in argument.description
+            assert "$ARGUMENTS" in argument.description
+            assert not argument.required
+    for resource in resources:
+        assert resource.description == resource_rows[resource.name]["description"]
+        assert "fetching does not create" in resource.description

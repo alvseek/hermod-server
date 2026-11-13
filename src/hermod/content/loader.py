@@ -250,7 +250,11 @@ class ContentLoader:
         opening sentence fixes that and keeps the two from drifting.
         """
         lead = _lead_sentence(self._procedure_path(name).read_text(encoding="utf-8"))
-        return lead or f"Procedure '{name}'."
+        purpose = lead or f"Procedure '{name}'."
+        return (
+            f"{purpose} Read with read_procedure and follow its steps; "
+            "fetching the instructions does not execute them."
+        )
 
     def argument_prompt(self, name: str) -> tuple[str, str] | None:
         """This procedure's single optional argument as ``(name, description)``.
@@ -341,9 +345,7 @@ class ContentLoader:
         that needs comparing.
         """
         path = self._procedure_path(name)
-        _text, used, _missing = self._inlined(
-            path.read_text(encoding="utf-8"), path.parent.parent
-        )
+        _text, used, _missing = self._inlined(path.read_text(encoding="utf-8"), path.parent.parent)
         return list(used)
 
     def unresolved_ops(self, name: str) -> list[str]:
@@ -426,4 +428,9 @@ class ContentLoader:
 
     def describe_resource(self, name: str) -> str:
         """A one-line purpose for a resource, read from the template itself."""
-        return _lead_sentence(self.get_resource(name)) or f"Template '{name}'."
+        purpose = _lead_sentence(self.get_resource(name)) or f"Template '{name}'."
+        return (
+            f"{purpose} Read verbatim with read_resource and use the relevant procedure "
+            "to fill it; fetching does not create a document. If stamped, pass template_version "
+            "separately for gated writes rather than storing it in the document."
+        )

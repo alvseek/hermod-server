@@ -254,8 +254,10 @@ def test_a_metadata_leading_template_still_reads_as_prose(tmp_path: Path) -> Non
         '---\nproject: "p"\n---\n\n# Front\n\nWhat it is for.\n', encoding="utf-8"
     )
     loader = ContentLoader([ContentSource(name="x", root=root)])
-    assert loader.describe_resource("stamped") == "What it is for."
-    assert loader.describe_resource("frontmatter") == "What it is for."
+    assert loader.describe_resource("stamped").startswith("What it is for.")
+    assert loader.describe_resource("frontmatter").startswith("What it is for.")
+    assert "fetching does not create" in loader.describe_resource("stamped")
+    assert loader.describe_resource("stamped") == loader.describe_resource("frontmatter")
 
 
 def test_an_unstamped_template_reads_as_none(tmp_path: Path) -> None:

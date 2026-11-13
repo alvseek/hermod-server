@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
+from pydantic import Field
 
 from hermod.business_services.awakening_service import AwakeningService
 from hermod.business_services.context_service import ContextService
@@ -61,6 +62,76 @@ _READ = {"readOnlyHint": True, "openWorldHint": False}
 # file and nothing here reaches past it.
 _WRITE = {"readOnlyHint": False, "openWorldHint": False}
 
+# Describe repeated semantics once without changing input validation or defaults.
+ProjectName = Annotated[
+    str,
+    Field(
+        description="Exact project identity, normally the repository's remote basename "
+        "without .git. Use the same name for its entries and map, not a filesystem path."
+    ),
+]
+AgentDomain = Annotated[
+    str,
+    Field(
+        description="Existing agent's kebab-case domain, e.g. software-architect, not a display "
+        "name. Discover domains with Munnin list_agents; the login does not identify an agent."
+    ),
+]
+EntryRef = Annotated[
+    str,
+    Field(
+        description="Full context-entry UUID from a Hermod listing/create response. "
+        "Not a theme or project name; short UUID prefixes are not resolved by this tool."
+    ),
+]
+EntryTheme = Annotated[
+    str,
+    Field(
+        description="Display name identifying this entry's topic. Not a unique key: duplicate "
+        "themes are allowed, so list existing entries before creating another. "
+        "Do not use orientation-map, which is reserved for the map tools."
+    ),
+]
+EntryContent = Annotated[
+    str,
+    Field(
+        description="Complete filled-in project-context document including frontmatter, "
+        "without the template_version stamp. Maximum 1000 lines; split larger topics."
+    ),
+]
+EntryStamp = Annotated[
+    str,
+    Field(
+        description="Current template_version from read_resource('project-context-template'). "
+        "Required write gate; pass separately rather than storing it in content."
+    ),
+]
+EntrySummary = Annotated[
+    str,
+    Field(
+        description="Required nonblank authored one-line description of this entry, taken "
+        "from its frontmatter; listings show this summary without fetching its body."
+    ),
+]
+EntryTags = Annotated[
+    list[str] | None,
+    Field(description="Tag strings to store on the new entry; omit/null for an empty list."),
+]
+MapContent = Annotated[
+    str,
+    Field(
+        description="Complete orientation-map document, including frontmatter and excluding "
+        "the template_version stamp. A whole document, not a patch or append."
+    ),
+]
+MapStamp = Annotated[
+    str,
+    Field(
+        description="Current template_version from read_resource('orientation-map-template'). "
+        "Required for create and update; the stamp is not stored."
+    ),
+]
+
 
 def _procedure_rows(content: ContentLoader) -> list[dict[str, str]]:
     """Name, title and one-line purpose of every served procedure — the menu ``help`` and
@@ -94,16 +165,24 @@ def build_mcp(
 
     @mcp.tool(title="Liveness check", annotations=_READ)
     def ping() -> str:
-        """Liveness check — returns 'pong'."""
+        """Check that the MCP handler responds; returns the string 'pong'.
+
+        Takes no parameters and changes nothing. Does not verify database connectivity,
+        template availability or completeness of project memory.
+        """
         return "pong"
 
     # Registered whether or not content is available: it is the fallback for a client that never
     # shows ``instructions``, so it has to exist in every configuration.
     @mcp.tool(name="help", title="What Hermod is and where to start", annotations=_READ)
     def help_() -> dict[str, Any]:
-        """What this server is and what to call first — the same text a client receives at
-        initialize as ``instructions`` — plus the served procedures. Read-only; call it when you
-        are unsure what Hermod serves or which procedure to read next."""
+        """Start here to understand Hermod and choose a repository-work procedure.
+
+        Takes no parameters. Returns initialize instructions and the served procedure menu
+        (name/title/description). With no available content the menu is empty. Read-only:
+        fetching guidance does not awaken an agent, modify a repository or write project memory.
+        Munnin supplies memory-body reads/edits; Hermod supplies project discovery and creation.
+        """
         return {"instructions": INSTRUCTIONS, "procedures": _procedure_rows(content)}
 
     _register_content(mcp, content)
@@ -125,7 +204,17 @@ def _register_awakening(mcp: FastMCP, awakening: AwakeningService) -> None:
         title="Assemble the coding half of an awakening",
         annotations=_READ,
     )
-    def awaken_coder(domain: str, projects: list[str]) -> dict[str, Any]:
+    def awaken_coder(
+        domain: AgentDomain,
+        projects: Annotated[
+            list[str],
+            Field(
+                description="Nonempty repository-name list: the current repository first, "
+                "then related repositories. No blank names. Order sets the session's home; "
+                "all payload sections span the full set, not just the first project."
+            ),
+        ],
+    ) -> dict[str, Any]:
         """One call for a coding awakening: the coding lane, the project set's episode index and
         its newest episode per project, that set's project context index, and its orientation maps.
 
@@ -142,6 +231,9 @@ def _register_awakening(mcp: FastMCP, awakening: AwakeningService) -> None:
         groups, with ``blocks_returned``/``blocks_total`` and a ``next_cursor`` when more remains.
         Every row carries ``uuid``, because finishing the read is Munnin's ``get(uuid, cursor=…)``
         and that is the only address it accepts. ``episode_index`` is unchanged.
+        Read-only; returns coding_lane, episode_index, episodes, context_index and maps.
+        A project without an episode or map is absent from that section, not auto-created.
+        Follow read_procedure("awaken-coder") for repository resolution and processing.
         """
         return awakening.awaken(domain=domain, projects=projects)
 
@@ -173,7 +265,10 @@ def _register_content(mcp: FastMCP, content: ContentLoader) -> None:
             fn.__signature__ = inspect.Signature([], return_annotation=str)  # type: ignore[attr-defined]
             return fn
         arg_name, arg_help = argument
-        fn.__doc__ = f"{procedure}\n\nArgs:\n    {arg_name}: {arg_help}\n"
+        fn.__doc__ = (
+            f"{procedure}\n\nArgs:\n    {arg_name}: {arg_help}. "
+            "Optional text substituted into $ARGUMENTS; fetching does not execute the procedure.\n"
+        )
         fn.__annotations__ = {arg_name: str, "return": str}
         parameter = inspect.Parameter(
             arg_name, inspect.Parameter.KEYWORD_ONLY, default="", annotation=str
@@ -229,20 +324,34 @@ def _register_content(mcp: FastMCP, content: ContentLoader) -> None:
     def list_procedures() -> list[dict[str, str]]:
         """List the overlay procedures this server serves — name, title, one-line purpose.
 
-        A procedure is the how-to an agent follows before acting. Read one with
-        read_procedure(name).
+        Takes no parameters. A procedure is the how-to an agent follows before acting. Pass
+        a returned name to read_procedure. Read-only discovery; does not execute instructions,
+        scan a repository or write project memory.
         """
         return _procedure_rows(content)
 
     @mcp.tool(title="Read a served procedure", annotations=_READ)
-    def read_procedure(name: str, argument: str | None = None) -> dict[str, Any]:
+    def read_procedure(
+        name: Annotated[
+            str, Field(description="Exact served name from list_procedures, without / or .md.")
+        ],
+        argument: Annotated[
+            str | None,
+            Field(
+                description="Optional text for $ARGUMENTS in the procedure's documented format "
+                "(e.g. an agent domain for awaken-coder). Omit/null/empty leaves authored text."
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """Read a served overlay procedure, composed for this server's storage backend.
 
         Use this whenever a procedure or instruction tells you to execute, invoke or run a slash
         command such as `/map-orientation`: call read_procedure("map-orientation") instead of the
         slash command and follow what it returns. `argument` fills the procedure's `$ARGUMENTS`
         slot (a domain for awaken-coder, a mode for map-orientation). A name that is not served
-        returns served=false rather than an error.
+        returns served=false rather than an error. Success returns served=true, name and content;
+        a miss includes name and a discovery note. Read-only: fetching does not perform the
+        repository operations or memory writes described by the procedure.
         """
         try:
             text = content.get_prompt(name, argument)
@@ -254,8 +363,9 @@ def _register_content(mcp: FastMCP, content: ContentLoader) -> None:
     def list_resources() -> list[dict[str, str]]:
         """List the templates this server serves — name, title, one-line purpose.
 
-        A resource is a template a procedure copies into the repository by path. Read one with
-        read_resource(name).
+        Takes no parameters. A resource is a template a procedure copies into the repository by
+        path. Pass a returned name to read_resource. Lists metadata only; does not download files,
+        create documents or validate a proposed write.
         """
         return [
             {
@@ -267,12 +377,22 @@ def _register_content(mcp: FastMCP, content: ContentLoader) -> None:
         ]
 
     @mcp.tool(title="Read a served resource", annotations=_READ)
-    def read_resource(name: str) -> dict[str, Any]:
+    def read_resource(
+        name: Annotated[
+            str,
+            Field(
+                description="Exact resource stem from list_resources, "
+                "without directory, extension or resource URI."
+            ),
+        ],
+    ) -> dict[str, Any]:
         """Read a served template verbatim.
 
         Use this when a served instruction points at a template by path: a reference to
         `templates/project-context-template.md` is read_resource("project-context-template"). A
-        name that is not served returns served=false rather than an error.
+        name that is not served returns served=false rather than an error. Success returns
+        served=true, name and content; a miss includes a discovery note. Does not save a file.
+        For template-gated writes, declare the template_version separately from the document.
         """
         try:
             text = content.get_resource(name)
@@ -309,37 +429,38 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         return payload
 
     @mcp.tool(title="List the shared project context", annotations=_READ)
-    def list_shared_context(project: str) -> list[dict[str, Any]]:
+    def list_shared_context(project: ProjectName) -> list[dict[str, Any]]:
         """List a project's shared context entries, the cross-agent half of its context index.
 
         Each row carries its `uuid`, and that uuid is how the entry is addressed from then on: a
         body comes from Munnin's `get(uuid)`, is changed with its `edit` family, has its summary
         and tags set with its `edit_metadata`, and is retired with its `soft_delete`. A row with
-        either lifecycle flag set is retired, so it is absent here.
+        either lifecycle flag set is retired, so it is absent here. Read-only; returns metadata
+        in theme order, not bodies or the orientation map. No matches returns an empty list.
+        All reads are scoped to the tenant resolved for this call.
         """
         return [_entry(entry) for entry in service.list_shared_context(project=project)]
 
     @mcp.tool(title="List one agent's project context", annotations=_READ)
-    def list_agent_context(project: str, agent: str) -> list[dict[str, Any]]:
+    def list_agent_context(project: ProjectName, agent: AgentDomain) -> list[dict[str, Any]]:
         """List one agent's own context entries for a project.
 
         `agent` is required rather than optional, because those rows are owned: answering without
         it could only be every agent's rows at once. Each row carries its `uuid`, which is what
-        Munnin's own ops address it by.
+        Munnin's own ops address it by. Returns live metadata in theme order, not bodies,
+        shared entries or the orientation map. No matches returns an empty list. Read-only
+        and tenant-scoped; archived/deleted entries are excluded.
         """
-        return [
-            _entry(entry)
-            for entry in service.list_agent_context(project=project, agent=agent)
-        ]
+        return [_entry(entry) for entry in service.list_agent_context(project=project, agent=agent)]
 
     @mcp.tool(title="Create a shared context entry", annotations=_WRITE)
     def create_shared_context_entry(
-        project: str,
-        theme: str,
-        content: str,
-        template_version: str,
-        content_summary: str,
-        tags: list[str] | None = None,
+        project: ProjectName,
+        theme: EntryTheme,
+        content: EntryContent,
+        template_version: EntryStamp,
+        content_summary: EntrySummary,
+        tags: EntryTags = None,
     ) -> dict[str, Any]:
         """Create one shared entry from a filled-in project-context template.
 
@@ -350,6 +471,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         is the line a listing shows beside the theme. No theme is checked here, so list first and
         create only when nothing already covers it. Every later read or change of the entry goes
         through Munnin, by the uuid this returns.
+        Creates a new tenant-scoped row, not an upsert. Returns its metadata and assigned uuid,
+        not the body. Refuses a blank summary, stale/missing template stamp or over-1000-line body.
         """
         entry = service.create_shared_context_entry(
             project=project,
@@ -363,19 +486,22 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
 
     @mcp.tool(title="Create an agent's context entry", annotations=_WRITE)
     def create_agent_context_entry(
-        project: str,
-        agent: str,
-        theme: str,
-        content: str,
-        template_version: str,
-        content_summary: str,
-        tags: list[str] | None = None,
+        project: ProjectName,
+        agent: AgentDomain,
+        theme: EntryTheme,
+        content: EntryContent,
+        template_version: EntryStamp,
+        content_summary: EntrySummary,
+        tags: EntryTags = None,
     ) -> dict[str, Any]:
         """Create one entry owned by an agent, from the same template and behind the same gates.
 
         `agent` must be a kebab domain the memory store already holds, because the row carries its
-        owner. Everything else matches the shared create, including that later reads and changes go
-        through Munnin by the uuid it returns.
+        owner. Read project-context-template first and pass its stamp separately; do not store it
+        in content. Requires a nonblank summary and at most 1000 body lines. Creates a new row
+        in the resolved tenant; does not deduplicate themes, so list this agent's entries first.
+        Returns metadata with the assigned uuid, not the body. Later reads and changes go
+        through Munnin by that uuid. Does not create an unknown agent.
         """
         entry = service.create_agent_context_entry(
             project=project,
@@ -389,7 +515,7 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         return _entry(entry)
 
     @mcp.tool(title="Promote an entry into the shared layer", annotations=_WRITE)
-    def promote_context_entry(uuid: str) -> dict[str, Any]:
+    def promote_context_entry(uuid: EntryRef) -> dict[str, Any]:
         """Move one entry from an agent's layer into the shared one, body untouched.
 
         The uuid is kept, so a handle a caller already holds still resolves afterwards, and the
@@ -398,25 +524,32 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         so a move onto a theme the shared layer already holds leaves two rows on it, exactly as a
         create would; list the target layer first when that matters. Reading or editing its body
         afterwards goes through Munnin, by the uuid it keeps.
+        Changes ownership/visibility within the resolved tenant and returns target metadata.
+        Missing or retired entries are refused; this does not copy memory between tenants.
         """
         return _entry(service.promote_context_entry(uuid=uuid))
 
     @mcp.tool(title="Demote an entry into an agent's layer", annotations=_WRITE)
-    def demote_context_entry(uuid: str, agent: str) -> dict[str, Any]:
+    def demote_context_entry(uuid: EntryRef, agent: AgentDomain) -> dict[str, Any]:
         """Move one shared entry into one agent's layer, body untouched and uuid kept.
 
         The owner is required, because the target row carries `agent_id` and a shared row has none
         to inherit. Reading or editing its body afterwards goes through Munnin, by the uuid it
         keeps.
+        Moves ownership within the resolved tenant and returns target metadata. Refuses an
+        unknown agent, missing/retired entry or entry already in the agent layer. Does not
+        deduplicate themes; list the target agent's entries before moving when collisions matter.
         """
         return _entry(service.demote_context_entry(uuid=uuid, agent=agent))
 
     @mcp.tool(title="Read the orientation map", annotations=_READ)
-    def read_map(project: str) -> dict[str, Any]:
+    def read_map(project: ProjectName) -> dict[str, Any]:
         """Read the project's orientation map whole, or `found: False`.
 
         One call answers existence as well, since an absent map comes back as `found: False`, so
         nothing checks for one first.
+        A found result includes project, content_summary, full content and dates. Read-only,
+        tenant-scoped; does not create a missing map or list the project's context entries.
         """
         orientation_map = service.read_map(project=project)
         if orientation_map is None:
@@ -432,13 +565,23 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
 
     @mcp.tool(title="Create the orientation map", annotations=_WRITE)
     def create_map(
-        project: str, content: str, template_version: str, content_summary: str | None = None
+        project: ProjectName,
+        content: MapContent,
+        template_version: MapStamp,
+        content_summary: Annotated[
+            str | None,
+            Field(
+                description="Optional authored one-line map summary; omit/null to store no summary."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Create the project's orientation map, from the orientation-map template.
 
         Read `orientation-map-template` first and pass the `template_version` stamp it carries; the
         map never carries it. Refuses a second map, since a project has one and it is updated
         thereafter, and a missing or stale stamp.
+        Writes in the resolved tenant. Returns project and created_date, not the stored body.
+        Does not scan the repository or generate a map: supply the complete authored document.
         """
         orientation_map = service.create_map(
             project=project,
@@ -450,12 +593,24 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
 
     @mcp.tool(title="Update the orientation map", annotations=_WRITE)
     def update_map(
-        project: str, content: str, template_version: str, content_summary: str | None = None
+        project: ProjectName,
+        content: MapContent,
+        template_version: MapStamp,
+        content_summary: Annotated[
+            str | None,
+            Field(
+                description="Replacement one-line map summary; "
+                "omit/null clears the stored summary, not preserves it."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Rewrite the project's map wholesale.
 
         It must exist first, which is what keeps an update from quietly becoming a create, and it
         carries the same template stamp the create declares.
+        Replaces the full content and summary in the resolved tenant; omission of the summary
+        clears it. Returns project and modified_date. This is not a patch or a repository scan;
+        use read_map first and supply the complete replacement document.
         """
         orientation_map = service.update_map(
             project=project,

@@ -47,14 +47,12 @@ _ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 # The server's only say over the overlay's content.
 EXCLUDED_PROCEDURES = frozenset({"push-all", "pull-all"})
 
-# Served procedure -> its single optional argument, as ``(name, description)``.
+# Compatibility names/help for existing prompt arguments, as ``(name, description)``.
 #
-# Authored rather than derived: the ``## Arguments`` sections are prose bullets in varying
-# shapes — one is a bare ``[domain]`` line, another a ``$ARGUMENTS`` token followed by mode
-# bullets, another two positional tokens, and one has no argument at all — so parsing them would
-# be a heuristic over data that is not deterministic. Every declared argument is **optional**,
-# because each procedure has an ask-if-missing branch, so the slot saves a round trip and makes
-# nothing stricter.
+# This is not a procedure inventory. The literal $ARGUMENTS token in a procedure's source
+# determines whether it takes input; an unlisted procedure with that token gets one optional
+# generic slot. Keep existing names so clients using domain/keyword/mode/context still work.
+# Prose argument sections are not parsed: their varying shapes do not define a machine contract.
 PROMPT_ARGUMENTS: dict[str, tuple[str, str]] = {
     "awaken-coder": ("domain", "the agent domain to awaken; asks if omitted"),
     "load-project-context": ("keyword", "match context files by keyword; lists all if omitted"),
@@ -259,18 +257,28 @@ class ContentLoader:
     def argument_prompt(self, name: str) -> tuple[str, str] | None:
         """This procedure's single optional argument as ``(name, description)``.
 
-        ``None`` when it takes none. Every declared argument is optional: each procedure asks for
-        what it needs when invoked without one, so the slot only ever saves a round trip.
+        The source's exact placeholder declares input, including for a newly discovered source
+        or procedure. Existing names override the generic slot, not whether input exists.
+        Omission leaves the procedure to use its documented default or ask for missing input.
+        A source without the placeholder takes no argument; unknown names raise ``KeyError``.
         """
-        return PROMPT_ARGUMENTS.get(name)
+        source = self._procedure_path(name).read_text(encoding="utf-8")
+        if _ARGUMENTS_PLACEHOLDER not in source:
+            return None
+        return PROMPT_ARGUMENTS.get(
+            name,
+            (
+                "argument",
+                "Input text in the format described by this procedure's Arguments section",
+            ),
+        )
 
     def get_prompt(self, name: str, arguments: str | None = None) -> str:
         """Return the composed procedure, with ``arguments`` filled in when one is given.
 
-        Every procedure carries a ``$ARGUMENTS`` placeholder that an installed slash command
-        fills from what the user typed; a served Prompt fills it the same way, so the two stay
-        equivalent. Substitution happens **only when an argument is supplied**, which keeps a
-        no-argument served Prompt identical to the command it mirrors.
+        A procedure's ``$ARGUMENTS`` placeholder is filled from what the user typed, just as
+        in an installed slash command. Substitution happens **only when an argument is
+        supplied**, which keeps a no-argument served Prompt identical to the command it mirrors.
         """
         text = self._compose_prompt(name)
         return text.replace(_ARGUMENTS_PLACEHOLDER, arguments) if arguments else text

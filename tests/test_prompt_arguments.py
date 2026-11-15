@@ -146,6 +146,8 @@ async def test_quick_wizard_saved_and_unsaved_inputs_reach_both_faces(
         '--plan "plans/approved change.md" --rules "guidance/build conventions.md"',
         '--plan "plans/approved change.md"',
         '--rules "guidance/build conventions.md"',
+        '"guidance/team conventions.md" --worktree "../feature work" --branch feature/change',
+        '--plan "plans/change.md" --worktree "../feature work" --branch feature/change --base HEAD',
     ],
 )
 async def test_implement_plan_rules_inputs_reach_both_faces(

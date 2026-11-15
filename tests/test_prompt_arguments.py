@@ -136,3 +136,32 @@ async def test_quick_wizard_saved_and_unsaved_inputs_reach_both_faces(
     assert "Write the complete saved plan **before presenting it for approval**" in expected
     assert "Do NOT execute until" in expected
     assert "## Execution Log" in expected
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [
+        None,
+        '"guidance/team conventions.md"',
+        '--plan "plans/approved change.md" --rules "guidance/build conventions.md"',
+        '--plan "plans/approved change.md"',
+        '--rules "guidance/build conventions.md"',
+    ],
+)
+async def test_implement_plan_rules_inputs_reach_both_faces(
+    prompt_server, argument: str | None
+) -> None:
+    authored = LOADER.get_prompt("implement-plan")
+    slot = LOADER.argument_prompt("implement-plan")[0]
+    async with Client(prompt_server) as client:
+        prompt = await client.get_prompt(
+            "implement-plan", {} if argument is None else {slot: argument}
+        )
+        tool = await client.call_tool(
+            "read_procedure", {"name": "implement-plan", "argument": argument}
+        )
+    expected = authored if argument is None else authored.replace("$ARGUMENTS", argument)
+    assert prompt.messages[0].content.text == tool.data["content"] == expected
+    assert "Paths may have any filename" in expected
+    assert "No rules document is required" in expected
+    assert "cannot silently replace approved scope" in expected

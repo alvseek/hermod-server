@@ -116,3 +116,23 @@ def test_a_new_parameterless_procedure_stays_parameterless(tmp_path: Path) -> No
 def test_unknown_procedure_argument_lookup_is_refused() -> None:
     with pytest.raises(KeyError, match="unknown prompt"):
         LOADER.argument_prompt("no-such-procedure")
+
+
+@pytest.mark.parametrize("argument", ["--save add a search filter", "add a search filter", None])
+async def test_quick_wizard_saved_and_unsaved_inputs_reach_both_faces(
+    prompt_server, argument: str | None
+) -> None:
+    authored = LOADER.get_prompt("quick-wizard")
+    slot = LOADER.argument_prompt("quick-wizard")[0]
+    async with Client(prompt_server) as client:
+        prompt = await client.get_prompt(
+            "quick-wizard", {} if argument is None else {slot: argument}
+        )
+        tool = await client.call_tool(
+            "read_procedure", {"name": "quick-wizard", "argument": argument}
+        )
+    expected = authored if argument is None else authored.replace("$ARGUMENTS", argument)
+    assert prompt.messages[0].content.text == tool.data["content"] == expected
+    assert "Write the complete saved plan **before presenting it for approval**" in expected
+    assert "Do NOT execute until" in expected
+    assert "## Execution Log" in expected

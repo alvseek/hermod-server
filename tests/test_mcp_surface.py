@@ -30,6 +30,7 @@ SERVED = [
     "project-wrap-up",
     "pull-project",
     "push-project",
+    "set-project-task-workflow",
     "update-project-context",
 ]
 
@@ -93,6 +94,25 @@ async def test_an_unserved_name_is_an_answer_not_an_error(mcp: FastMCP) -> None:
         result = await client.call_tool("read_procedure", {"name": "generate-readme"})
     assert result.data["served"] is False
     assert "list_procedures()" in result.data["note"]
+
+
+async def test_task_workflow_authoring_reaches_prompt_and_tool(mcp: FastMCP) -> None:
+    marker = "Use the existing tracker connection; save incomplete if unavailable."
+    async with Client(mcp) as client:
+        tool = await client.call_tool(
+            "read_procedure", {"name": "set-project-task-workflow", "argument": marker}
+        )
+        prompt = await client.get_prompt("set-project-task-workflow", {"argument": marker})
+
+    text = tool.data["content"]
+    assert tool.data["served"] is True
+    assert prompt.messages[0].content.text == text
+    assert text.startswith("# Set Project Task Workflow")
+    assert marker in text
+    assert "$ARGUMENTS" not in text
+    assert "/components/" not in text
+    assert "Follow `/update-project-context` Steps 3–7" in text
+    assert "Wait for explicit approval before saving" in text
 
 
 async def test_read_resource_round_trips(mcp: FastMCP) -> None:

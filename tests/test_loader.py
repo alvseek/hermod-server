@@ -24,6 +24,7 @@ SERVED = [
     "project-wrap-up",
     "pull-project",
     "push-project",
+    "set-project-task-workflow",
     "update-project-context",
 ]
 

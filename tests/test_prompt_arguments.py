@@ -142,12 +142,13 @@ async def test_quick_wizard_saved_and_unsaved_inputs_reach_both_faces(
     "argument",
     [
         None,
-        '"guidance/team conventions.md"',
+        '--rules "guidance/team conventions.md"',
         '--plan "plans/approved change.md" --rules "guidance/build conventions.md"',
         '--plan "plans/approved change.md"',
         '--rules "guidance/build conventions.md"',
-        '"guidance/team conventions.md" --worktree "../feature work" --branch feature/change',
-        '--plan "plans/change.md" --worktree "../feature work" --branch feature/change --base HEAD',
+        '--rules "guidance/team conventions.md" '
+        '--worktree "../feature work" --branch feature/change',
+        '--plan "plans/change.md" --worktree "../feature work" --branch feature/change',
     ],
 )
 async def test_implement_plan_rules_inputs_reach_both_faces(
@@ -164,6 +165,9 @@ async def test_implement_plan_rules_inputs_reach_both_faces(
         )
     expected = authored if argument is None else authored.replace("$ARGUMENTS", argument)
     assert prompt.messages[0].content.text == tool.data["content"] == expected
-    assert "Paths may have any filename" in expected
-    assert "No rules document is required" in expected
-    assert "cannot silently replace approved scope" in expected
+    assert "All arguments are optional" in expected
+    assert "override any argument except `--plan`" in expected
+    assert "direct implementation or delegation" in expected
+    assert "use this worktree if it exists; otherwise create it" in expected
+    assert "use this branch if it exists; otherwise create it from the current HEAD" in expected
+    assert "Do not overwrite existing work or force a branch switch" in expected

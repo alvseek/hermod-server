@@ -229,7 +229,8 @@ def _register_awakening(mcp: FastMCP, awakening: AwakeningService) -> None:
 
         Each row of ``episodes`` is a **page**, not the whole rolling body: up to three timestamp
         groups, with ``blocks_returned``/``blocks_total`` and a ``next_cursor`` when more remains.
-        Every row carries ``uuid``, because finishing the read is Munnin's ``get(uuid, cursor=…)``
+        Every row carries ``uuid``, because finishing the read is Munnin's
+        ``get_memory(uuid, cursor=…)``
         and that is the only address it accepts. ``episode_index`` is unchanged.
         Read-only; returns coding_lane, episode_index, episodes, context_index and maps.
         A project without an episode or map is absent from that section, not auto-created.
@@ -406,7 +407,8 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
 
     Discovery and creation only: a listing per layer, a create per layer, the two direction ops,
     and the map's three. Everything addressed by a uuid that already exists is a tool on the
-    memory layer (``get``, the ``edit`` family, ``edit_metadata``, ``soft_delete``), because those
+    memory layer (``get_memory``, the ``edit_memory_body`` family,
+    ``edit_memory_metadata``, ``soft_delete_memory``), because those
     already act on these rows, so nothing here duplicates one. The three ops with no code behind
     them (``§ ensure-context-dir``, ``§ update-context-index``, ``§ check-entry-size``) get no
     tool: the backend document declares them no-ops, so there is nothing to call.
@@ -433,8 +435,10 @@ def _register_store(mcp: FastMCP, service: ContextService) -> None:
         """List a project's shared context entries, the cross-agent half of its context index.
 
         Each row carries its `uuid`, and that uuid is how the entry is addressed from then on: a
-        body comes from Munnin's `get(uuid)`, is changed with its `edit` family, has its summary
-        and tags set with its `edit_metadata`, and is retired with its `soft_delete`. A row with
+        body comes from Munnin's `get_memory(uuid)`, is changed with its
+        `edit_memory_body` family, has its summary
+        and tags set with its `edit_memory_metadata`, and is retired with its
+        `soft_delete_memory`. A row with
         either lifecycle flag set is retired, so it is absent here. Read-only; returns metadata
         in theme order, not bodies or the orientation map. No matches returns an empty list.
         All reads are scoped to the tenant resolved for this call.

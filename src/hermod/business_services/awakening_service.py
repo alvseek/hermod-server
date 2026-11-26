@@ -94,7 +94,8 @@ class AwakeningService:
             "coding_lane": [_pattern_row(pattern) for pattern in repo.coding_lane()],
             # the set's episodes: the index to choose from, and the newest page per project, which
             # is where the open items a session carries forward actually live. A page, not a body:
-            # each row names its uuid and cursor so the rest is one Munnin `get` away, and the
+            # each row names its uuid and cursor so the rest is one Munnin
+            # `get_memory` away, and the
             # two-call awakening stays two calls.
             "episode_index": [
                 _index_row(entry) for entry in repo.episode_index(agent=domain, projects=ordered)
@@ -137,8 +138,8 @@ def _episode_row(episode: Episode, page: EpisodePage) -> dict[str, object]:
     """One project's newest episode as a page, plus the uuid that makes it continuable.
 
     ``uuid`` is not decoration: the page's content is deliberately partial, and the only way to
-    ask for the next timestamp group is Munnin's ``get(uuid, cursor=…)``. A row without it hands
-    a caller a body it cannot finish reading."""
+    ask for the next timestamp group is Munnin's ``get_memory(uuid, cursor=…)``. A row
+    without it hands a caller a body it cannot finish reading."""
     return {
         "uuid": episode.uuid,
         "project": episode.project,

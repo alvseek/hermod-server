@@ -6,9 +6,15 @@ Python · FastMCP · Starlette. Apache-2.0.
 
 ## What it serves
 
-Eight of the overlay's ten procedures, composed exactly as the overlay's own compiler composes them: component references inlined at their reference point, then the `## Storage Mechanics` section swapped for the backend document's concrete ops. A served Prompt and an installed slash command are the same instruction, which is the property this pipeline exists to hold.
+Hermod discovers procedures from its configured content roots in order, with the first source winning a duplicate name. Format 2 procedures are rendered by the pinned shared composer: components come from the procedure's own source when it has a component directory, otherwise from the first available component directory; backend instructions come from the first configured source containing the selected backend. Missing references fail rather than silently disappearing. Legacy roots retain their heading-based composition.
+
+Format 2 references require Format 2 components in `procedures/components/`. If the selected component owner has only a legacy root-level `components/` directory, the reference fails rather than silently taking a different owner's component; migrate that owner or supply the intended Format 2 component there.
+
+The default served backend is DB; standalone command compilers use Markdown. Their shared prose stays aligned, but the concrete tool and file instructions intentionally differ. Resources are served verbatim, and argument substitution remains at the delivery boundary.
 
 The two that are absent are `push-all` and `pull-all`. They compose the memory store's push and pull, and the memory write is durable on every insert, so there is nothing left for them to do here.
+
+`HERMOD_CONTENT_ROOTS` selects comma-separated roots. `HERMOD_BACKEND_DOC` selects the backend document relative to a root. The existing `storage-backends/db.md` and `storage-backends/markdown.md` values also resolve to the standardized `procedures/memory/storage-backends/` locations; a custom relative document remains supported. For Format 2, `markdown.md` selects the Markdown variant and other configured filenames select DB.
 
 Alongside the content it owns **the project store** — context entries and the orientation map — and registers one tool per `db.md` op, because those tools write and a store the overlay's procedures address has to be reachable from the same face.
 

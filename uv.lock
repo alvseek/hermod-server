@@ -448,6 +448,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "starlette" },
     { name = "uvicorn" },
+    { name = "valaskjalf-workspace-access", extra = ["postgres"] },
 ]
 
 [package.dev-dependencies]
@@ -465,6 +466,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.6" },
     { name = "starlette", specifier = ">=1.6" },
     { name = "uvicorn", specifier = ">=0.52.1" },
+    { name = "valaskjalf-workspace-access", extras = ["postgres"], git = "https://github.com/alvseek/valaskjalf.git?rev=f95da7df01d9d3883df59174f7fc0b0de68b506a" },
 ]
 
 [package.metadata.requires-dev]
@@ -1497,6 +1499,16 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/da/34/30e9280707135d2cfc589dfff3cb796bd07a3aeb1a3e415ba09dd89d7bb4/uvicorn-0.54.0.tar.gz", hash = "sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620", size = 112283, upload-time = "2026-09-25T06:52:37.601Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/0c/b54a4fdd7f90a3af8b02ebc9ce6712c2c208b7926a2f7bad95c33ebbe943/uvicorn-0.54.0-py3-none-any.whl", hash = "sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf", size = 87427, upload-time = "2026-09-25T06:52:35.829Z" },
+]
+
+[[package]]
+name = "valaskjalf-workspace-access"
+version = "0.1.0"
+source = { git = "https://github.com/alvseek/valaskjalf.git?rev=f95da7df01d9d3883df59174f7fc0b0de68b506a#f95da7df01d9d3883df59174f7fc0b0de68b506a" }
+
+[package.optional-dependencies]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
 ]
 
 [[package]]

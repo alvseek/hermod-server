@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from urllib.parse import urlsplit
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AuthProvider, RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
@@ -31,6 +32,10 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
+from valaskjalf_workspace_access import (
+    HomeAccountNotFound,
+    WorkspaceAccessDenied,
+)
 
 from hermod import __version__
 from hermod.api_mcp.server import build_mcp
@@ -279,11 +284,7 @@ def validate_store(config: Config) -> None:
 
 
 def build_project_repository(config: Config, *, user_id: str) -> ProjectRepository:
-    """The store for one tenant, over Valaskjalf's records (ADR-027).
-
-    A tenant is required rather than defaulted: every row in those tables carries one, and a value
-    invented here would write rows that no login would ever reach.
-    """
+    """Open an explicit offline import target without applying workspace selection."""
     return RecordProjectRepository(user_id=user_id, db_url=config.db_url)
 
 
@@ -343,13 +344,18 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
         except KeyError:
             return Response(status_code=404)
         return Response(content=body, media_type="text/markdown")
-    # The tenant is a property of the call, so the repository is built inside it, where the
-    # verified token exists and nowhere earlier.
+    # Resolve the caller and its workspace once per store request, never for public content.
     resolver = TenantResolver(db_url=config.db_url)
 
     def repository_for() -> ProjectRepository:
-        """The store for the call in progress: the tenant exists only inside it."""
-        return build_project_repository(config, user_id=resolver.current_user_id())
+        """Bind one authorized workspace to the call in progress."""
+        home = resolver.current_user_id()
+        try:
+            return RecordProjectRepository.for_caller(home_user_id=home, db_url=config.db_url)
+        except WorkspaceAccessDenied as exc:
+            raise ToolError("Access to the selected workspace has been revoked.") from exc
+        except HomeAccountNotFound as exc:
+            raise ToolError("The caller's home account no longer exists.") from exc
 
     service = ContextService(
         repository_for,

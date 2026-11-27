@@ -13,9 +13,12 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
+import psycopg
 import pytest
 import uvicorn
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
+from valaskjalf_workspace_access import HomeAccountNotFound, PostgresWorkspaceAccess
 
 from hermod.app import MCP_MOUNT_PATH, build_app
 from hermod.configuration.config import Config
@@ -58,7 +61,10 @@ def live_server() -> Iterator[str]:
     make_store(url, user_id="alvi", agents=("meta",), identity=(TEST_ISSUER, SUBJECT))
     port = _free_port()
     config = uvicorn.Config(
-        build_app(Config(port=port, db_url=url, content_roots=(CONTENT,)), auth=auth_for(SUBJECT)),
+        build_app(
+            Config(port=port, db_url=url, content_roots=(CONTENT,)),
+            auth=auth_for(SUBJECT, "bob"),
+        ),
         host="127.0.0.1",
         port=port,
         log_level="warning",
@@ -166,3 +172,84 @@ async def test_a_context_entry_is_created_and_discoverable(live_server: str) -> 
                 "list_shared_context", {"project": "agent-memory-project"}
             )
         ).data == []
+
+
+async def test_workspace_selection_revocation_and_recovery(live_server: str, monkeypatch) -> None:
+    """The normal authenticated MCP path resolves each request, including writes."""
+    import os
+
+    url = os.environ["HERMOD_PG_TEST_URL"]
+    stamp = ContentLoader([ContentSource(name="overlay", root=CONTENT)]).template_version(
+        "project-context-template"
+    )
+    async with Client(live_server, auth=TOKEN) as alice, Client(
+        live_server, auth=token_for("bob")
+    ) as bob:
+        async def create(client, theme):
+            return (await client.call_tool("create_shared_context_entry", {
+                "project": "workspace-test",
+                "theme": theme,
+                "content": f"# {theme}",
+                "template_version": stamp,
+                "content_summary": theme,
+            })).data
+
+        async def themes(client):
+            result = await client.call_tool("list_shared_context", {"project": "workspace-test"})
+            return {row["theme"] for row in result.data}
+
+        await create(alice, "alice")
+        await create(bob, "bob")
+        assert await themes(alice) == {"alice"}
+        assert await themes(bob) == {"bob"}
+        with psycopg.connect(url) as conn:
+            bob_id = conn.execute(
+                "SELECT user_id FROM user_identity WHERE iss = %s AND sub = %s",
+                (TEST_ISSUER, "bob"),
+            ).fetchone()[0]
+            assert bob_id != "alvi"
+            conn.execute(
+                "INSERT INTO tenant_access (tenant_user_id, member_user_id, granted_date) "
+                "VALUES (%s, %s, '2026-01-01')",
+                (bob_id, "alvi"),
+            )
+            conn.execute(
+                "UPDATE account SET active_user_id = %s WHERE user_id = %s", (bob_id, "alvi")
+            )
+        assert await themes(alice) == {"bob"}
+        created = await create(alice, "shared-write")
+        assert await themes(bob) == {"bob", "shared-write"}
+        with psycopg.connect(url) as conn:
+            assert conn.execute(
+                "SELECT user_id FROM shared_record WHERE uuid = %s", (created["uuid"],)
+            ).fetchone()[0] == bob_id
+            conn.execute(
+                "UPDATE tenant_access SET revoked_date = '2026-01-01' "
+                "WHERE tenant_user_id = %s AND member_user_id = %s",
+                (bob_id, "alvi"),
+            )
+        with pytest.raises(ToolError, match="revoked"):
+            await themes(alice)
+        with pytest.raises(ToolError, match="revoked"):
+            await create(alice, "must-not-write")
+        with psycopg.connect(url) as conn:
+            assert conn.execute(
+                "SELECT count(*) FROM shared_record WHERE title = 'must-not-write'"
+            ).fetchone()[0] == 0
+            conn.execute("UPDATE account SET active_user_id = NULL WHERE user_id = %s", ("alvi",))
+        assert await themes(alice) == {"alice"}
+
+        with monkeypatch.context() as patcher:
+            def missing_home(self, home):
+                raise HomeAccountNotFound(home)
+
+            patcher.setattr(PostgresWorkspaceAccess, "resolve_workspace", missing_home)
+            with pytest.raises(ToolError, match="home account no longer exists"):
+                await themes(alice)
+
+        def no_database(*args, **kwargs):
+            raise AssertionError("non-store operation consulted the database")
+
+        monkeypatch.setattr(psycopg, "connect", no_database)
+        assert (await alice.call_tool("ping", {})).data == "pong"
+        assert (await alice.call_tool("read_procedure", {"name": "awaken-coder"})).data["served"]

@@ -11,10 +11,14 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=3.4.6",
+    "procedure-composer==0.2.0",
     "psycopg[binary,pool]>=3.3.6",
     "starlette>=1.6",
     "uvicorn>=0.52.1",
 ]
+
+[tool.uv.sources]
+procedure-composer = { git = "https://github.com/alvseek/agent-memory-system.git", rev = "4f1dab49ecebfd54a27ebcfcd681b3cbb032756d", subdirectory = "packages/procedure-composer" }
 
 [project.scripts]
 hermod = "hermod.__main__:main"

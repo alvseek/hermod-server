@@ -4,25 +4,21 @@ A procedure is served as an MCP **Prompt** — the how-to an agent reads before 
 template as an MCP **Resource**. Content is read from a source's checkout on every call, so
 editing a procedure changes what is served with no re-import and no second copy to keep in step.
 
-Composition is two substitutions, and the split follows the overlay's own layout: component
-references are inlined (a carried copy — see ``inline.py``), then the ``## Storage Mechanics``
-section is swapped for the backend document's concrete ops (imported — see ``seam_bridge.py``).
-A served Prompt and an installed skill are therefore the same instruction, which is the property
-this module exists to preserve.
+Format 2 procedures use the installed shared composer with a scoped view of the selected source,
+its component owner and the configured backend owner. Legacy procedures retain the legacy inliner
+and heading-based seam. A served DB prompt and an installed Markdown command may legitimately
+have different backend instructions.
 
 **What is not served.** ``push-all`` and ``pull-all`` compose the memory store's push and pull,
 and the memory write is durable on every insert, so there is nothing left for them to do here.
 That list is the server's only say over the overlay's content, and it is a constant so that
 adding to it is a visible one-liner rather than a branch somewhere.
 
-**Sources are a list, and today it holds one.** The shape is deliberate rather than speculative:
-a client that can connect only one server would want Munnin's procedures through this one, and
-that arrives as a proxy provider *beside* this source, so nothing here changes when it does.
+**Sources are ordered.** A procedure is selected from the first source that contains it.
 
 **The backend document is configuration.** A served client has no local store, so a served
-prompt must compose onto the store's ops rather than the markdown ones. The default is the
-markdown document while the project store's mechanics are unwritten; flipping it is a config
-change, not a code change.
+prompt normally composes onto the store's ops rather than the markdown ones; a configuration
+override may select the Markdown backend instead.
 """
 
 from __future__ import annotations
@@ -31,9 +27,18 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from procedure_composer import CompositionError, expand_regions
+
 from hermod.configuration.config import DEFAULT_BACKEND_DOC
-from hermod.content.inline import inline_components
-from hermod.content.seam_bridge import seam_compose
+from hermod.content import legacy_seam
+from hermod.content.composition import (
+    authored_metadata,
+    compose_procedure,
+    is_format2,
+    missing_components,
+)
+from hermod.content.inline import _COMPONENT_LINK, inline_components
+from hermod.content.safety import safe_path
 
 _PROCEDURES_DIR = "procedures"
 _COMPONENTS_DIR = "components"
@@ -74,6 +79,7 @@ PROMPT_ARGUMENTS: dict[str, tuple[str, str]] = {
 # module extracts and substitutes sections, and says nothing about which ops a body asked for.
 _OP_RE = re.compile(r"§\s*([a-z][a-z0-9-]*)")
 _OP_DEF_RE = re.compile(r"^#{1,6}\s*§\s*([a-z][a-z0-9-]*)", re.MULTILINE)
+_REGION_RE = re.compile(r"(?m)^[ \t]*@start[ \t]+region\b")
 
 # The stamp a template carries below its title, read here and never stored. It exists so a writer
 # can prove it read the template it follows, which is the gate the store enforces.
@@ -172,6 +178,12 @@ def _body_without_mechanics(text: str, marker: str) -> str:
     return "".join(lines[:start] + lines[end:])
 
 
+def _legacy_backend_text(path: Path) -> str:
+    """Legacy backend documents are plain text; converted ones have named-region scaffolding."""
+    text = path.read_text(encoding="utf-8")
+    return expand_regions(text) if _REGION_RE.search(text) else text
+
+
 class ContentLoader:
     """Reads and composes served overlay content from one or more checkouts."""
 
@@ -200,10 +212,15 @@ class ContentLoader:
 
     def _backend_path(self) -> Path | None:
         """The configured backend document, from the first source that has it."""
+        relative = Path(self._backend_doc)
         for source in self._sources:
-            candidate = source.root / self._backend_doc
-            if candidate.is_file():
-                return candidate
+            choices = [relative]
+            if relative.parts[:1] == ("storage-backends",):
+                choices.insert(0, Path("procedures/memory") / relative)
+            for choice in choices:
+                candidate = safe_path(source.root, choice)
+                if candidate.is_file():
+                    return candidate
         return None
 
     # --- prompts (procedures, composed) ----------------------------------------
@@ -217,28 +234,42 @@ class ContentLoader:
         """
         found: dict[str, Path] = {}
         for source in self._sources:
-            directory = source.root / _PROCEDURES_DIR
+            directory = safe_path(source.root, _PROCEDURES_DIR)
             if not directory.is_dir():
                 continue
             for path in sorted(directory.glob("*.md")):
                 if path.stem not in EXCLUDED_PROCEDURES:
-                    found.setdefault(path.stem, path)
+                    try:
+                        safe_path(source.root, Path(_PROCEDURES_DIR) / path.name)
+                    except ValueError:
+                        continue
+                    if path.is_file():
+                        found.setdefault(path.stem, path)
         return found
 
     def _procedure_path(self, name: str) -> Path:
         """The source file of a served procedure. Raises ``KeyError`` for any other name."""
-        try:
-            return self._procedures()[name]
-        except KeyError:
-            raise KeyError(f"unknown prompt: {name}") from None
+        if name not in EXCLUDED_PROCEDURES:
+            for source in self._sources:
+                directory = safe_path(source.root, _PROCEDURES_DIR)
+                if directory.is_dir():
+                    for path in directory.glob("*.md"):
+                        if path.stem == name:
+                            try:
+                                safe_path(source.root, Path(_PROCEDURES_DIR) / path.name)
+                            except ValueError:
+                                continue
+                            if path.is_file():
+                                return path
+        raise KeyError(f"unknown prompt: {name}")
 
     def list_prompts(self) -> list[str]:
         """The served procedure names."""
         return sorted(self._procedures())
 
     def title_prompt(self, name: str) -> str:
-        """A display title for a served procedure, from its own ``#`` heading."""
-        return _h1_title(self._procedure_path(name).read_text(encoding="utf-8")) or name
+        """A display title from Format 2 metadata, or a legacy document's heading."""
+        return self.prompt_info(name)[0]
 
     def describe_prompt(self, name: str) -> str:
         """A one-line purpose for a served procedure, read from the procedure itself.
@@ -247,12 +278,7 @@ class ContentLoader:
         templated sentence leave the menu unable to tell them apart. Reading each procedure's own
         opening sentence fixes that and keeps the two from drifting.
         """
-        lead = _lead_sentence(self._procedure_path(name).read_text(encoding="utf-8"))
-        purpose = lead or f"Procedure '{name}'."
-        return (
-            f"{purpose} Read with read_procedure and follow its steps; "
-            "fetching the instructions does not execute them."
-        )
+        return self.prompt_info(name)[1]
 
     def argument_prompt(self, name: str) -> tuple[str, str] | None:
         """This procedure's single optional argument as ``(name, description)``.
@@ -262,16 +288,44 @@ class ContentLoader:
         Omission leaves the procedure to use its documented default or ask for missing input.
         A source without the placeholder takes no argument; unknown names raise ``KeyError``.
         """
-        source = self._procedure_path(name).read_text(encoding="utf-8")
-        if _ARGUMENTS_PLACEHOLDER not in source:
-            return None
-        return PROMPT_ARGUMENTS.get(
-            name,
-            (
-                "argument",
-                "Input text in the format described by this procedure's Arguments section",
-            ),
+        return self.prompt_info(name)[2]
+
+    def prompt_info(self, name: str) -> tuple[str, str, tuple[str, str] | None]:
+        """Inspect one header once, without composing or parsing referenced content."""
+        path = self._procedure_path(name)
+        raw = path.read_bytes()
+        try:
+            metadata = authored_metadata(path, raw)
+        except (CompositionError, UnicodeError):
+            # Keep broken documents discoverable; their own read still fails closed.
+            return name, (
+                f"Procedure '{name}'. Read with read_procedure and follow its steps; "
+                "fetching the instructions does not execute them."
+            ), None
+        if metadata is not None:
+            title = metadata.title
+            purpose = metadata.description
+            argument = (
+                (metadata.argument_name, metadata.argument_description)
+                if metadata.argument_name is not None and metadata.argument_description is not None
+                else None
+            )
+        else:
+            source = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+            title = _h1_title(source) or name
+            purpose = _lead_sentence(source) or f"Procedure '{name}'."
+            argument = None
+            if _ARGUMENTS_PLACEHOLDER in source:
+                argument = PROMPT_ARGUMENTS.get(
+                    name,
+                    ("argument", "Input text in the format described by this procedure's "
+                     "Arguments section"),
+                )
+        description = (
+            f"{purpose} Read with read_procedure and follow its steps; "
+            "fetching the instructions does not execute them."
         )
+        return title, description, argument
 
     def get_prompt(self, name: str, arguments: str | None = None) -> str:
         """Return the composed procedure, with ``arguments`` filled in when one is given.
@@ -291,7 +345,7 @@ class ContentLoader:
         reference resolving rather than quietly dropping the body.
         """
         for candidate in [root, *(source.root for source in self._sources)]:
-            directory = candidate / _COMPONENTS_DIR
+            directory = safe_path(candidate, _COMPONENTS_DIR)
             if directory.is_dir():
                 return directory
         return None
@@ -306,14 +360,27 @@ class ContentLoader:
         directory = self._components_dir(root)
         if directory is None:
             return text, (), ()
+        for _label, name in _COMPONENT_LINK.findall(text):
+            safe_path(directory, f"{name}.md")
         text, used, missing = inline_components(text, directory)
         return text, tuple(dict.fromkeys(used)), tuple(dict.fromkeys(missing))
 
     def missing_components(self, name: str) -> tuple[str, ...]:
         """Component references this procedure's served form could not resolve."""
         path = self._procedure_path(name)
+        if is_format2(path):
+            backend = "markdown" if Path(self._backend_doc).stem == "markdown" else "db"
+            return missing_components(
+                path, tuple(source.root for source in self._sources), self._backend_path(), backend
+            )
         _text, _used, missing = self._inlined(path.read_text(encoding="utf-8"), path.parent.parent)
         return missing
+
+    def _compose_format2(self, path: Path):
+        backend = "markdown" if Path(self._backend_doc).stem == "markdown" else "db"
+        return compose_procedure(
+            path, tuple(source.root for source in self._sources), self._backend_path(), backend
+        )
 
     def _compose_prompt(self, name: str) -> str:
         """Inline the components, then substitute the backend's ops for the mechanics marker.
@@ -324,6 +391,8 @@ class ContentLoader:
         core when the procedure has no marker or the backend defines nothing for it.
         """
         path = self._procedure_path(name)
+        if is_format2(path):
+            return self._compose_format2(path).text
         core, components, _missing = self._inlined(
             path.read_text(encoding="utf-8"), path.parent.parent
         )
@@ -331,14 +400,12 @@ class ContentLoader:
         backend = self._backend_path()
         if backend is None:
             return core
-        # The seam belongs to the composition, not to the repository a procedure happens to live
-        # in: it comes from whichever source carries the backend document, which is the same
-        # repository, so a second source with no storage backend of its own still composes. A
-        # procedure with no mechanics marker comes back from the substitute untouched.
-        compose = seam_compose(str(backend.parent.parent))
+        # The backend may come from another root. The legacy interpreter is server-owned, so
+        # even a legacy procedure using a converted backend never imports content checkout code.
+        compose = legacy_seam
         try:
             section = compose.compose_backend_section(
-                backend.read_text(encoding="utf-8"), name, components
+                _legacy_backend_text(backend), name, components
             )
             composed = compose.substitute_storage_mechanics(core, section)
         except KeyError:
@@ -353,6 +420,11 @@ class ContentLoader:
         that needs comparing.
         """
         path = self._procedure_path(name)
+        if is_format2(path):
+            result = self._compose_format2(path)
+            return list(dict.fromkeys(
+                Path(span.path).stem for span in result.spans if span.kind == "component"
+            ))
         _text, used, _missing = self._inlined(path.read_text(encoding="utf-8"), path.parent.parent)
         return list(used)
 
@@ -364,11 +436,16 @@ class ContentLoader:
         no user on this side to notice it.
         """
         path = self._procedure_path(name)
+        if is_format2(path):
+            result = self._compose_format2(path)
+            body = "".join(span.text for span in result.spans if span.kind in ("text", "component"))
+            mechanics = "".join(span.text for span in result.spans if span.kind == "storage")
+            return sorted(set(_OP_RE.findall(body)) - set(_OP_DEF_RE.findall(mechanics)))
         source_text = path.read_text(encoding="utf-8")
         backend = self._backend_path()
         if backend is None:
             return []
-        compose = seam_compose(str(backend.parent.parent))
+        compose = legacy_seam
         marker = compose.STORAGE_MARKER
         referenced = set(_OP_RE.findall(_body_without_mechanics(source_text, marker)))
         if not referenced:
@@ -376,7 +453,7 @@ class ContentLoader:
         _core, components, _missing = self._inlined(source_text, path.parent.parent)
         try:
             section = compose.compose_backend_section(
-                backend.read_text(encoding="utf-8"), name, components
+                _legacy_backend_text(backend), name, components
             )
         except KeyError:
             return sorted(referenced)
@@ -394,18 +471,28 @@ class ContentLoader:
         names: set[str] = set()
         for source in self._sources:
             for dirname in _RESOURCE_DIRS:
-                directory = source.root / dirname
+                directory = safe_path(source.root, dirname)
                 if directory.is_dir():
-                    names |= {p.stem for p in directory.glob("*.md")}
+                    for path in directory.glob("*.md"):
+                        try:
+                            safe_path(source.root, Path(dirname) / path.name)
+                        except ValueError:
+                            continue
+                        if path.is_file():
+                            names.add(path.stem)
         return sorted(names)
 
     def _resource_path(self, name: str) -> Path:
         """The source file of a served resource. Raises ``KeyError`` if absent."""
         for source in self._sources:
             for dirname in _RESOURCE_DIRS:
-                candidate = source.root / dirname / f"{name}.md"
-                if candidate.is_file():
-                    return candidate
+                directory = safe_path(source.root, dirname)
+                if directory.is_dir():
+                    for candidate in directory.glob("*.md"):
+                        if candidate.stem == name:
+                            safe_path(source.root, Path(dirname) / candidate.name)
+                            if candidate.is_file():
+                                return candidate
         raise KeyError(f"unknown resource: {name}")
 
     def get_resource(self, name: str) -> str:

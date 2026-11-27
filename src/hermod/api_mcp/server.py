@@ -21,7 +21,6 @@ read-only hint a client shows before it lets a tool run.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable
 from typing import Annotated, Any
 
@@ -29,6 +28,7 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
 from pydantic import Field
 
+from hermod.api_mcp.content_prompts import ContentPromptProvider
 from hermod.business_services.awakening_service import AwakeningService
 from hermod.business_services.context_service import ContextService
 from hermod.content.loader import ContentLoader
@@ -138,14 +138,11 @@ def _procedure_rows(content: ContentLoader) -> list[dict[str, str]]:
     ``list_procedures`` both show, empty when no overlay content is available."""
     if not content.available():
         return []
-    return [
-        {
-            "name": name,
-            "title": content.title_prompt(name),
-            "description": content.describe_prompt(name),
-        }
-        for name in content.list_prompts()
-    ]
+    rows = []
+    for name in content.list_prompts():
+        title, description, _argument = content.prompt_info(name)
+        rows.append({"name": name, "title": title, "description": description})
+    return rows
 
 
 def build_mcp(
@@ -248,43 +245,7 @@ def _register_content(mcp: FastMCP, content: ContentLoader) -> None:
     if not content.available():
         return
 
-    def _make_prompt(procedure: str, argument: tuple[str, str] | None) -> Callable[..., str]:
-        # FastMCP derives a prompt's arguments from the function signature, so a procedure that
-        # takes one needs a real parameter carrying its name. The parameter is built dynamically
-        # because each procedure names its argument differently, and **both** ``__signature__``
-        # and ``__annotations__`` must be set: pydantic reads the second and raises on the first
-        # alone. A plain ``str`` annotation is deliberate — an ``Annotated[str, Field(...)]``
-        # makes FastMCP append a JSON-schema instruction to the description, which reads as noise
-        # in a command menu.
-        def fn(**kwargs: str) -> str:
-            return content.get_prompt(procedure, kwargs.get(argument[0]) if argument else None)
-
-        fn.__name__ = procedure.replace("-", "_")
-        if argument is None:
-            # A bare signature, or FastMCP sees the raw ``**kwargs`` and refuses the prompt.
-            fn.__annotations__ = {"return": str}
-            fn.__signature__ = inspect.Signature([], return_annotation=str)  # type: ignore[attr-defined]
-            return fn
-        arg_name, arg_help = argument
-        fn.__doc__ = (
-            f"{procedure}\n\nArgs:\n    {arg_name}: {arg_help}. "
-            "Optional text substituted into $ARGUMENTS; fetching does not execute the procedure.\n"
-        )
-        fn.__annotations__ = {arg_name: str, "return": str}
-        parameter = inspect.Parameter(
-            arg_name, inspect.Parameter.KEYWORD_ONLY, default="", annotation=str
-        )
-        fn.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
-            [parameter], return_annotation=str
-        )
-        return fn
-
-    for name in content.list_prompts():
-        mcp.prompt(
-            name=name,
-            title=content.title_prompt(name),
-            description=content.describe_prompt(name),
-        )(_make_prompt(name, content.argument_prompt(name)))
+    mcp.add_provider(ContentPromptProvider(content))
 
     def _make_resource(resource: str) -> Callable[[], str]:
         # Zero-arg, so FastMCP registers a static resource rather than a URI template.

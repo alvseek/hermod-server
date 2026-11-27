@@ -5,7 +5,7 @@
 # Shape: inbound-serving (uvicorn on HERMOD_PORT). The project store is a database reached over
 # the network, so this image keeps no state of its own and needs a DSN at runtime.
 # The two submodules are NOT separate units — they are read-only content this server loads at
-# runtime (served prompts and templates, plus storage-backends/seam.py loaded by path), so they
+# runtime (served procedures, components, backend documents and templates), so they
 # are copied in as content and never written to.
 
 # ---- Build Stage ----
@@ -21,6 +21,10 @@ ENV UV_CACHE_DIR=/opt/uv-cache \
     UV_LINK_MODE=copy
 
 WORKDIR /app
+
+# uv fetches the composer from its pinned public Git revision at build time.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 
 # Dependencies before source, so this layer survives every code edit.
 COPY pyproject.toml uv.lock ./

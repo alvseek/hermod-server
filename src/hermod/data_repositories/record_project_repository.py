@@ -42,6 +42,7 @@ from datetime import datetime, timezone
 
 import psycopg
 from psycopg.rows import dict_row
+from valaskjalf_workspace_access import PostgresWorkspaceAccess
 
 from hermod.data_entities.awakening import CodingPattern, Episode, EpisodeIndexEntry
 from hermod.data_entities.project_context import ContextEntry, ContextScope, OrientationMap
@@ -109,6 +110,12 @@ class RecordProjectRepository:
     def __init__(self, *, user_id: str, db_url: str) -> None:
         self._user_id = user_id
         self._db_url = db_url
+
+    @classmethod
+    def for_caller(cls, *, home_user_id: str, db_url: str) -> RecordProjectRepository:
+        """Open a request-scoped repository only after checking the current grant."""
+        workspace = PostgresWorkspaceAccess(db_url).resolve_workspace(home_user_id)
+        return cls(user_id=workspace.workspace_user_id, db_url=db_url)
 
     # --- connection ---------------------------------------------------------------
 

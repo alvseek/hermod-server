@@ -34,7 +34,6 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from valaskjalf_workspace_access import (
     HomeAccountNotFound,
-    PostgresWorkspaceAccess,
     WorkspaceAccessDenied,
 )
 
@@ -285,11 +284,7 @@ def validate_store(config: Config) -> None:
 
 
 def build_project_repository(config: Config, *, user_id: str) -> ProjectRepository:
-    """Bind the store to an already authorized workspace or an explicit import target.
-
-    The caller resolves access before invoking this for an MCP request. The offline importer
-    deliberately passes its explicitly named home account without applying workspace selection.
-    """
+    """Open an explicit offline import target without applying workspace selection."""
     return RecordProjectRepository(user_id=user_id, db_url=config.db_url)
 
 
@@ -351,18 +346,16 @@ def build_app(config: Config | None = None, auth: AuthProvider | None = None) ->
         return Response(content=body, media_type="text/markdown")
     # Resolve the caller and its workspace once per store request, never for public content.
     resolver = TenantResolver(db_url=config.db_url)
-    workspace_access = PostgresWorkspaceAccess(config.db_url)
 
     def repository_for() -> ProjectRepository:
         """Bind one authorized workspace to the call in progress."""
         home = resolver.current_user_id()
         try:
-            workspace = workspace_access.resolve_workspace(home)
+            return RecordProjectRepository.for_caller(home_user_id=home, db_url=config.db_url)
         except WorkspaceAccessDenied as exc:
             raise ToolError("Access to the selected workspace has been revoked.") from exc
         except HomeAccountNotFound as exc:
             raise ToolError("The caller's home account no longer exists.") from exc
-        return build_project_repository(config, user_id=workspace.workspace_user_id)
 
     service = ContextService(
         repository_for,

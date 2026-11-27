@@ -1,8 +1,7 @@
 """The tenant comes from the token, resolved through Munnin's own mapping.
 
-These run against a real PostgreSQL, because the mechanism *is* SQL: the `(iss, sub)` primary key,
-the foreign key into `account`, and the create-then-re-read that makes two simultaneous first
-logins settle on one tenant. A double would prove none of it.
+These run against a real PostgreSQL, exercising the shared package against the identity tables
+and verifying Hermod's token and importer-facing behavior.
 """
 
 from __future__ import annotations

@@ -11,8 +11,8 @@ Four things follow from not owning the store, and each one explains a line below
   creates or alters anything. A missing table or column surfaces on the first use, which is
   deliberate: a second runner would be a second opinion about the shape of a shared table.
 - **A tenant on every row.** `user_id` is not optional, so the repository is constructed with the
-  resolved tenant and is never process-wide. The tenant comes from the caller's verified token;
-  the agent comes from the call. They are orthogonal, and both are needed.
+  authorized workspace (or the importer's explicit target) and is never process-wide. The agent
+  comes from the call. They are orthogonal, and both are needed.
 - **The agent is required for the private scope.** `memory_record` is agent-scoped, so a private
   read without one would answer with every agent's rows at once. Asking for it is what keeps a
   private listing from being an aggregate.

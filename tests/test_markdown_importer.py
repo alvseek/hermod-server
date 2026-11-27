@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from hermod.data_entities.project_context import ContextScope
@@ -282,3 +283,26 @@ def test_main_refuses_a_pair_nobody_has_signed_in_with(
     code = main(["--source", str(root), "--iss", ISSUER, "--sub", "never-signed-in"])
     assert code == 2
     assert "refuses to invent" in capsys.readouterr().out
+    with psycopg.connect(os.environ["HERMOD_PG_TEST_URL"]) as conn:
+        for table in ("account", "user_identity", "shared_record", "memory_record"):
+            expected = 1 if table in ("account", "user_identity") else 0
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == expected
+
+
+def test_import_targets_named_home_even_when_another_workspace_is_selected(
+    tmp_path: Path, monkeypatch, store
+) -> None:
+    url = os.environ["HERMOD_PG_TEST_URL"]
+    monkeypatch.setenv("HERMOD_DB_URL", url)
+    with psycopg.connect(url) as conn:
+        conn.execute("INSERT INTO account (user_id, created_date) VALUES ('bob', '2026-01-01')")
+        conn.execute("UPDATE account SET active_user_id = 'bob' WHERE user_id = %s", (USER,))
+        conn.execute(
+            "INSERT INTO tenant_access (tenant_user_id, member_user_id, granted_date) "
+            "VALUES ('bob', %s, '2026-01-01')",
+            (USER,),
+        )
+    assert main(["--source", str(_memory_root(tmp_path)), "--iss", ISSUER, "--sub", SUB]) == 0
+    with psycopg.connect(url) as conn:
+        assert conn.execute("SELECT DISTINCT user_id FROM shared_record").fetchall() == [(USER,)]
+        assert conn.execute("SELECT DISTINCT user_id FROM memory_record").fetchall() == [(USER,)]

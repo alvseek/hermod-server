@@ -2,7 +2,7 @@
 
 Hermod does **not** own these tables. Munnin's migration runner creates them (decisions 6 and 7),
 so their real shape lives in `agent-memory-server`, and this is a deliberate, minimal copy: the
-two record tables plus the two parent tables their foreign keys point at, carrying the columns
+record, identity and sharing tables with the columns
 this server reads or writes and nothing else. Munnin's `search_tsv`, its GIN indexes and its CHECK
 constraints are absent on purpose, because nothing here touches them.
 
@@ -25,7 +25,8 @@ CREATE TABLE account (
   user_id      TEXT PRIMARY KEY,
   display_name TEXT,
   email        TEXT,
-  created_date TEXT NOT NULL
+  created_date TEXT NOT NULL,
+  active_user_id TEXT
 );
 CREATE TABLE user_identity (
   iss         TEXT NOT NULL,
@@ -34,6 +35,13 @@ CREATE TABLE user_identity (
   linked_date TEXT NOT NULL,
   PRIMARY KEY (iss, sub),
   FOREIGN KEY (user_id) REFERENCES account(user_id)
+);
+CREATE TABLE tenant_access (
+  tenant_user_id TEXT NOT NULL REFERENCES account(user_id),
+  member_user_id TEXT NOT NULL REFERENCES account(user_id),
+  granted_date TEXT NOT NULL,
+  revoked_date TEXT,
+  PRIMARY KEY (tenant_user_id, member_user_id)
 );
 CREATE TABLE agent (
   user_id      TEXT NOT NULL REFERENCES account(user_id),

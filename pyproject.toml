@@ -15,10 +15,12 @@ dependencies = [
     "psycopg[binary,pool]>=3.3.6",
     "starlette>=1.6",
     "uvicorn>=0.52.1",
+    "valaskjalf-workspace-access[postgres]",
 ]
 
 [tool.uv.sources]
 procedure-composer = { git = "https://github.com/alvseek/agent-memory-system.git", rev = "4f1dab49ecebfd54a27ebcfcd681b3cbb032756d", subdirectory = "packages/procedure-composer" }
+valaskjalf-workspace-access = { git = "https://github.com/alvseek/valaskjalf.git", rev = "f95da7df01d9d3883df59174f7fc0b0de68b506a" }
 
 [project.scripts]
 hermod = "hermod.__main__:main"

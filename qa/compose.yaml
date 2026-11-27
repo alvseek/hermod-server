@@ -1,0 +1,15 @@
+name: hermod-qa
+
+services:
+  hermod:
+    build:
+      context: ..
+    ports:
+      - "127.0.0.1:8210:8210"
+    environment:
+      HERMOD_HOST: "0.0.0.0"
+      HERMOD_LOCAL_BIND_ALL: "1"
+      HERMOD_PUBLIC_BASE_URL: "http://127.0.0.1:8210"
+      # Content-only bench: config requires a DSN, but no store operation is
+      # authorized. Container loopback cannot resolve to a sibling's database.
+      HERMOD_DB_URL: "postgresql://qa@127.0.0.1:5432/hermod_qa"
